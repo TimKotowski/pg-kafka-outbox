@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS outbox_jobs (
   max_retries int,
   priority timestampz not null,
   created_at timestampz not null,
+  started_by varchar,
   started_at timestampz not null,
 
   constraint pk_outbox_jobs primary key(id)
@@ -26,6 +27,7 @@ CREATE TABLE IF NOT EXISTS outbox_dead_letter_jobs (
   status status NOT NULL,
   priority timestampz not null,
   created_at timestampz not null,
+  started_by varchar,
   started_at timestampz not null,
 
   constraint pk_outbox_dead_letter_jobs primary key(id)
