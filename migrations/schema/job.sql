@@ -1,4 +1,4 @@
-CREATE TYPE status AS ENUM ('PENDING', 'PROCESSED', 'FAILED');
+CREATE TYPE status AS ENUM ('SCHEDULED', 'RUNNING' 'FAILED');
 
 CREATE TABLE IF NOT EXISTS outbox_jobs (
   id bigint,
@@ -6,12 +6,12 @@ CREATE TABLE IF NOT EXISTS outbox_jobs (
   key bytea,
   payload bytea,
   partition int,
-  status status NOT NULL DEFAULT 'PENDING',
+  status status NOT NULL DEFAULT 'SCHEDULED',
   retries int,
   max_retries int,
   priority timestampz not null,
   created_at timestampz not null,
-  started_by varchar,
+  started_by varchar NOT NULL,
   started_at timestampz not null,
 
   constraint pk_outbox_jobs primary key(id)
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS outbox_dead_letter_jobs (
   status status NOT NULL,
   priority timestampz not null,
   created_at timestampz not null,
-  started_by varchar,
+  started_by varchar NOT NULL,
   started_at timestampz not null,
 
   constraint pk_outbox_dead_letter_jobs primary key(id)
