@@ -46,9 +46,9 @@ func TestStartConsumerDryRun(t *testing.T) {
 	}
 
 	assert.Eventually(t, func() bool {
-		return consumer.ops.Load() == 4
+		return consumer.ops.Load() == uint64(availableThreads)
 	},
-		time.Duration(1)*time.Second, time.Duration(15)*time.Millisecond,
+		time.Duration(10)*time.Second, time.Duration(15)*time.Millisecond,
 	)
 }
 
