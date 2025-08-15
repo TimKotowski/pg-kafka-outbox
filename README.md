@@ -6,3 +6,6 @@ that will scrape messages and send them out to to consumers to handle the messag
 
 Idea is to give user control on the process of handling messages to kafka, leaving only the reliability and atomoicity to
 the outbox pattern. Supports arbitrary binary data.
+
+
+This Readme is currently under active development. 
