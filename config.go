@@ -17,8 +17,7 @@ type ConfigFunc func(c *Config)
 func NewConfig(opts ...ConfigFunc) *Config {
 	c := &Config{
 		JobPollInterval:    time.Duration(15) * time.Second,
-		JobStalledInterval: time.Duration(5) * time.Minute,
-		MaxJobSize:         MaxJobSize,
+		JobStalledInterval: time.Duration(2) * time.Minute,
 	}
 
 	for _, opt := range opts {
