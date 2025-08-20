@@ -1,15 +1,20 @@
 package outbox
 
-import "time"
-
-const (
-	MaxJobSize = 500
+import (
+	"crypto/tls"
+	"time"
 )
 
 type Config struct {
-	JobPollInterval    time.Duration
+	JobPollInterval time.Duration
+
 	JobStalledInterval time.Duration
-	MaxJobSize         int
+
+	MaxJobSize int
+
+	DSN string
+
+	TLSConfig *tls.Config
 }
 
 type ConfigFunc func(c *Config)
@@ -42,5 +47,17 @@ func WithJobStallPollInterval(interval time.Duration) ConfigFunc {
 func WithMaxJobSize(size int) ConfigFunc {
 	return func(c *Config) {
 		c.MaxJobSize = size
+	}
+}
+
+func WithDSN(dsn string) ConfigFunc {
+	return func(c *Config) {
+		c.DSN = dsn
+	}
+}
+
+func WithTLSConfig(tlsConfig *tls.Config) ConfigFunc {
+	return func(c *Config) {
+		c.TLSConfig = tlsConfig
 	}
 }

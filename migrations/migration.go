@@ -3,7 +3,7 @@ package migrations
 import (
 	"context"
 	"embed"
-	"log"
+	"fmt"
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/migrate"
@@ -20,28 +20,28 @@ func init() {
 	}
 }
 
-func Migrate(ctx context.Context, db *bun.DB) {
+func Migrate(ctx context.Context, db *bun.DB) error {
 	m := migrate.NewMigrator(db, Migrations)
 	if err := m.Init(ctx); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	group, err := m.Migrate(ctx)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	// Check if any migrations were applied
 	if group.IsZero() {
-		log.Println("no new migrations were applied")
+		fmt.Println("no new migrations were applied")
 	} else {
-		log.Printf("applied migration group: %s (migrations: %v)", group, group.Migrations)
+		fmt.Printf("applied migration group: %s (migrations: %v)", group, group.Migrations)
 	}
 
 	migrations, err := m.AppliedMigrations(ctx)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	fmt.Printf("total applied migrations %d", len(migrations))
 
-	log.Fatalf("total applied migrations %d", len(migrations))
+	return nil
 }

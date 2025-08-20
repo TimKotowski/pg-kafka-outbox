@@ -6,11 +6,11 @@ import (
 )
 
 type Consumer interface {
-	Consume(ctx context.Context, claim ConsumerClaim)
+	Consume(claim ConsumerClaim)
 }
 
 type ConsumerHandler interface {
-	StartConsumer(ctx context.Context, consumer Consumer) error
+	StartConsumer(consumer Consumer) error
 }
 
 type ConsumerClaim interface {
@@ -18,30 +18,33 @@ type ConsumerClaim interface {
 }
 
 type consumer struct {
+	ctx    context.Context
 	config *Config
-	// TODO BackendService
+	outbox *Outbox
 }
 
-func NewConsumer(ctx context.Context, config *Config) ConsumerHandler {
+func NewConsumer(outbox *Outbox) ConsumerHandler {
 	return &consumer{
-		config: config,
+		ctx:    outbox.ctx,
+		config: outbox.config,
+		outbox: outbox,
 	}
 }
 
 // StartConsumer starts up an independent consumer.
 // Consumers are thread safe, allowing many Consumers to be instantiated.
 // Each with there own seperate processing of outbox messages.
-func (c *consumer) StartConsumer(ctx context.Context, consumer Consumer) error {
+func (c *consumer) StartConsumer(consumer Consumer) error {
 	receiver := newConsumerClaim(c.config)
 
-	go consumer.Consume(ctx, receiver)
+	go consumer.Consume(receiver)
 
-	go c.consume(ctx, receiver)
+	go c.consume(receiver)
 
 	return nil
 }
 
-func (c *consumer) consume(ctx context.Context, recv *consumerClaim) {
+func (c *consumer) consume(recv *consumerClaim) {
 	ticker := time.NewTicker(c.config.JobPollInterval)
 	for {
 		select {
@@ -49,22 +52,8 @@ func (c *consumer) consume(ctx context.Context, recv *consumerClaim) {
 		// Channels are independent of global in-memory storage.
 		// Ensures less error-prone behavior by delegating message closure to separate threads,
 		// enabling multiple consumer instances based on client requirements.
-		case <-ctx.Done():
+		case <-c.ctx.Done():
 			close(recv.messages)
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-// Crashed pods, rolling deployments can lead to needing adoption/reprocessing of jobs.
-// reQueueOrphanedJobs makes sure jobs are re-added to the queue in a way that they can be re-processed.
-func (c *consumer) reQueueOrphanedJobs(ctx context.Context) {
-	ticker := time.NewTicker(c.config.JobStalledInterval)
-
-	for {
-		select {
-		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
