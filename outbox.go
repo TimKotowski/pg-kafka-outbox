@@ -2,53 +2,59 @@ package outbox
 
 import (
 	"context"
-	"time"
+	"errors"
 
+	"github.com/TimKotowski/pg-kafka-outbox/internal/repository"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
+	"github.com/uptrace/bun"
 )
 
 type Outbox struct {
-	ctx    context.Context
-	config *Config
-	pg     *pg
+	ctx        context.Context
+	conf       *Config
+	repository repository.Repository
+	db         *bun.DB
+	worker     *worker
 }
 
-func NewFromConfig(ctx context.Context, config *Config) (*Outbox, error) {
-	db, err := initalizeDB(config)
+func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
+	db, err := initalizeDB(conf)
 	if err != nil {
 		return nil, err
 	}
 
+	repository := repository.NewRepository(db)
+	worker := newWorker(ctx, conf, repository)
+
 	return &Outbox{
-		ctx:    ctx,
-		config: config,
-		pg:     db,
+		ctx:        ctx,
+		conf:       conf,
+		repository: repository,
+		db:         db,
+		worker:     worker,
 	}, nil
 }
 
 func (o *Outbox) Init() error {
-	if err := migrations.Migrate(o.ctx, o.pg.db); err != nil {
+	if !o.worker.state.CompareAndSwap(unintialized, running) {
+		return errors.New("initalizing outbox already occured, and outbox is activley running")
+	}
+
+	if err := migrations.Migrate(o.ctx, o.db); err != nil {
 		return err
 	}
-	go o.requeueOrphanedJobs(o.ctx)
 
-	return nil
-}
-
-func (o *Outbox) Enqueue() error {
-	return nil
-}
-
-// Crashed pods, rolling deployments can lead to needing adoption/reprocessing of jobs.
-// reQueueOrphanedJobs makes sure jobs are re-added to the queue in a way that they can be re-processed.
-func (o *Outbox) requeueOrphanedJobs(ctx context.Context) {
-	ticker := time.NewTicker(o.config.JobStalledInterval)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	for range o.worker.availableWorkers {
+		go o.worker.start()
 	}
+
+	return nil
+}
+
+func (o *Outbox) EnqueueBatchJobs(jobs []Job) error {
+	return nil
+}
+
+func (o *Outbox) EnqueueJob(job Job) error {
+	return nil
 }

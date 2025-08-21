@@ -3,7 +3,7 @@ package migrations
 import (
 	"context"
 	"embed"
-	"fmt"
+	"log"
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/migrate"
@@ -12,10 +12,10 @@ import (
 var Migrations = migrate.NewMigrations()
 
 //go:embed schema/*.sql
-var sqlMigrations embed.FS
+var migrationFS embed.FS
 
 func init() {
-	if err := Migrations.Discover(sqlMigrations); err != nil {
+	if err := Migrations.Discover(migrationFS); err != nil {
 		panic(err)
 	}
 }
@@ -32,16 +32,17 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 	}
 
 	if group.IsZero() {
-		fmt.Println("no new migrations were applied")
+		log.Println("no new migrations were applied")
 	} else {
-		fmt.Printf("applied migration group: %s (migrations: %v)", group, group.Migrations)
+		log.Printf("applied migration group: %s (migrations: %v)", group, group.Migrations)
 	}
 
 	migrations, err := m.AppliedMigrations(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("total applied migrations %d", len(migrations))
+
+	log.Printf("total applied migrations %d", len(migrations))
 
 	return nil
 }
