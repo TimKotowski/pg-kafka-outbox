@@ -2,6 +2,7 @@ package outbox_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,19 +20,12 @@ type TestConsumer struct {
 	ops atomic.Uint64
 }
 
-func TestConfig(t *testing.T) {
+func TestOutbox(t *testing.T) {
 	pool, err := dockertest.NewPool("")
 	assert.NoError(t, err)
 	resource := postgres.SetUp(pool, t)
 
-	t.Run("config options allow correct setting", func(t *testing.T) {
-		c := outbox.NewConfig(
-			outbox.WithJobPollInterval(time.Duration(5) * time.Second),
-		)
-		assert.Equal(t, time.Duration(5)*time.Second, c.JobPollInterval)
-	})
-
-	t.Run("consumer to start succesfully", func(t *testing.T) {
+	t.Run("allow to start outbox succesfully with listening consumers", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -62,8 +56,37 @@ func TestConfig(t *testing.T) {
 			time.Duration(10)*time.Second, time.Duration(15)*time.Millisecond,
 		)
 	})
+
+	t.Run("outbox initialzing should happen exactly once", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		config := outbox.NewConfig(
+			outbox.WithJobPollInterval(time.Duration(50)*time.Millisecond),
+			outbox.WithDSN(resource.Dsn),
+		)
+
+		o, err := outbox.NewFromConfig(ctx, config)
+		assert.NoError(t, err)
+		err = o.Init()
+		assert.NoError(t, err)
+
+		err = o.Init()
+		assert.EqualError(t, err, errors.New("initalizing outbox already occured, and outbox is activley running").Error())
+	})
 }
 
-func (t *TestConsumer) Consume(claim outbox.ConsumerClaim) {
+func (t *TestConsumer) Consume(ctx context.Context, ack outbox.Acknowledger, claim outbox.ConsumerClaim) {
 	t.ops.Add(1)
+	for {
+		select {
+		case _, ok := <-claim.Messages():
+			if !ok {
+				return
+			}
+
+		case <-ctx.Done():
+			return
+		}
+	}
 }

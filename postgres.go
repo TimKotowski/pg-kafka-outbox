@@ -11,17 +11,13 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
-type pg struct {
-	db *bun.DB
-}
-
-func initalizeDB(config *Config) (*pg, error) {
+func initalizeDB(config *Config) (*bun.DB, error) {
 	db, err := GetDBConnection(config)
 	if err != nil {
 		return nil, err
 	}
 
-	return &pg{db}, nil
+	return db, nil
 }
 
 func GetDBConnection(config *Config) (*bun.DB, error) {

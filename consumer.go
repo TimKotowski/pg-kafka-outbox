@@ -3,10 +3,12 @@ package outbox
 import (
 	"context"
 	"time"
+
+	"github.com/TimKotowski/pg-kafka-outbox/internal/repository"
 )
 
 type Consumer interface {
-	Consume(claim ConsumerClaim)
+	Consume(ctx context.Context, ack Acknowledger, claim ConsumerClaim)
 }
 
 type ConsumerHandler interface {
@@ -18,15 +20,16 @@ type ConsumerClaim interface {
 }
 
 type consumer struct {
-	ctx    context.Context
-	config *Config
-	outbox *Outbox
+	ctx        context.Context
+	conf       *Config
+	outbox     *Outbox
+	repository repository.Repository
 }
 
 func NewConsumer(outbox *Outbox) ConsumerHandler {
 	return &consumer{
 		ctx:    outbox.ctx,
-		config: outbox.config,
+		conf:   outbox.conf,
 		outbox: outbox,
 	}
 }
@@ -35,9 +38,10 @@ func NewConsumer(outbox *Outbox) ConsumerHandler {
 // Consumers are thread safe, allowing many Consumers to be instantiated.
 // Each with there own seperate processing of outbox messages.
 func (c *consumer) StartConsumer(consumer Consumer) error {
-	receiver := newConsumerClaim(c.config)
+	receiver := newConsumerClaim(c.conf)
+	ack := newAcknowledgement(c.repository)
 
-	go consumer.Consume(receiver)
+	go consumer.Consume(c.ctx, ack, receiver)
 
 	go c.consume(receiver)
 
@@ -45,7 +49,7 @@ func (c *consumer) StartConsumer(consumer Consumer) error {
 }
 
 func (c *consumer) consume(recv *consumerClaim) {
-	ticker := time.NewTicker(c.config.JobPollInterval)
+	ticker := time.NewTicker(c.conf.JobPollInterval)
 	for {
 		select {
 		// Allows context passing for graceful closure of channels.

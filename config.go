@@ -6,15 +6,11 @@ import (
 )
 
 type Config struct {
-	JobPollInterval time.Duration
-
+	JobPollInterval    time.Duration
 	JobStalledInterval time.Duration
-
-	MaxJobSize int
-
-	DSN string
-
-	TLSConfig *tls.Config
+	MaxJobSize         int
+	DSN                string
+	TLSConfig          *tls.Config
 }
 
 type ConfigFunc func(c *Config)
