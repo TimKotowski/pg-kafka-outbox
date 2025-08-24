@@ -38,4 +38,4 @@ CREATE TABLE IF NOT EXISTS dead_letter_outbox_messages (
   constraint pk_dead_letter_jobs primary key(job_id)
 );
 
-CREATE INDEX job_status_composite_idx on jobs(status)
+CREATE INDEX job_status_composite_idx on jobs(status);
