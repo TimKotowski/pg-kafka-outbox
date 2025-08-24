@@ -16,7 +16,7 @@ type ConsumerHandler interface {
 }
 
 type ConsumerClaim interface {
-	Messages() <-chan Job
+	Messages() <-chan Message
 }
 
 type consumer struct {
@@ -49,7 +49,7 @@ func (c *consumer) StartConsumer(consumer Consumer) error {
 }
 
 func (c *consumer) consume(recv *consumerClaim) {
-	ticker := time.NewTicker(c.conf.JobPollInterval)
+	ticker := time.NewTicker(c.conf.PollInterval)
 	for {
 		select {
 		// Allows context passing for graceful closure of channels.
@@ -65,15 +65,15 @@ func (c *consumer) consume(recv *consumerClaim) {
 }
 
 type consumerClaim struct {
-	messages chan Job
+	messages chan Message
 }
 
 func newConsumerClaim(config *Config) *consumerClaim {
 	return &consumerClaim{
-		messages: make(chan Job, config.MaxJobSize),
+		messages: make(chan Message),
 	}
 }
 
-func (c *consumerClaim) Messages() <-chan Job {
+func (c *consumerClaim) Messages() <-chan Message {
 	return c.messages
 }

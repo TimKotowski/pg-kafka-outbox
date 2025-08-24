@@ -19,7 +19,7 @@ func (a Acknowledgement) String() string {
 }
 
 type Acknowledger interface {
-	Acknowledge(message Job, ackAcknowledgement Acknowledgement) error
+	Acknowledge(message Message, ackAcknowledgement Acknowledgement) error
 }
 
 type ackAcknowledgement struct {
@@ -32,6 +32,6 @@ func newAcknowledgement(repository repository.Repository) Acknowledger {
 	}
 }
 
-func (a *ackAcknowledgement) Acknowledge(message Job, acackAcknowledgement Acknowledgement) error {
+func (a *ackAcknowledgement) Acknowledge(message Message, acackAcknowledgement Acknowledgement) error {
 	return nil
 }

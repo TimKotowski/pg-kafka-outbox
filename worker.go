@@ -21,7 +21,7 @@ type worker struct {
 	ctx                  context.Context
 	config               *Config
 	repository           repository.Repository
-	acknowledgedMessages chan Job
+	acknowledgedMessages chan Message
 }
 
 func newWorker(ctx context.Context, config *Config, repo repository.Repository) *worker {
@@ -35,7 +35,7 @@ func newWorker(ctx context.Context, config *Config, repo repository.Repository) 
 }
 
 func (w *worker) start() {
-	ticker := time.NewTicker(w.config.JobStalledInterval)
+	ticker := time.NewTicker(w.config.StalledInterval)
 
 	for {
 		select {
