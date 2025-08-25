@@ -2,7 +2,7 @@ CREATE TYPE status AS ENUM (
 'PENDING',
 'RUNNING',
 'FAILED',
-'PENDING_RETRY',
+'PENDING_RETRY'
 );
 
 CREATE TABLE IF NOT EXISTS outbox (
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS dead_letter_outbox (
   created_at timestamptz not null,
   started_at timestamptz not null,
 
-  constraint pk_dead_letter_jobs primary key(job_id)
+  constraint pk_dead_letter_outbox primary key(job_id)
 );
 
 CREATE INDEX outbox_status_idx on outbox(status);
