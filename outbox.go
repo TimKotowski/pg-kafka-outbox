@@ -51,10 +51,10 @@ func (o *Outbox) Init() error {
 	return nil
 }
 
-func (o *Outbox) EnqueueBatchJobs(jobs []Job) error {
+func (o *Outbox) EnqueueBatchMessages(messages []Message) error {
 	return nil
 }
 
-func (o *Outbox) EnqueueJob(job Job) error {
+func (o *Outbox) EnqueueMessage(message Message) error {
 	return nil
 }
