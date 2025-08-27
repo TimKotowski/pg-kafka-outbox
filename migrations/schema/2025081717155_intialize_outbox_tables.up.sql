@@ -1,6 +1,7 @@
 CREATE TYPE status AS ENUM (
 'PENDING',
 'RUNNING',
+'SUCCESSFUL',
 'FAILED',
 'PENDING_RETRY'
 );
@@ -17,7 +18,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   max_retries int not null,
   fingerprint bytea not null,
   created_at timestamptz not null,
-  started_at timestamptz not null,
+  started_at timestamptz,
 
   constraint pk_outbox_jobs primary key(job_id)
 );
@@ -41,3 +42,4 @@ CREATE TABLE IF NOT EXISTS dead_letter_outbox (
 
 CREATE INDEX outbox_status_idx on outbox(status);
 CREATE INDEX outbox_fingerprint_idx on outbox(fingerprint);
+CREATE INDEX outbox_partial_idx on outbox(created_at) where status IN ('PENDING', 'PENDING_RETRY');
