@@ -11,3 +11,10 @@ test-coverage: ## run test coverage with coverage output.
 
 go-version:
 	@go version
+
+dev:
+	docker compose -f ./compose/compose.yaml up
+
+.PHONY: clean
+clean:
+	docker compose -f ./compose/compose.yaml down
