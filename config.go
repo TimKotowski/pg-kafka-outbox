@@ -6,31 +6,52 @@ import (
 )
 
 type Config struct {
-	//////////////////////
+	//////////////////////////
 	// OUTBOX QUEUE SECTION //
-	//////////////////////
+	/////////////////////////
 
 	// Interval rate for polling outbox messages.
-	PollInterval time.Duration
+	QueueDelay time.Duration
 
-	// Interval rate for requeueing hanging/stalled outbox messages.
-	StalledInterval time.Duration
+	// Interval period for requeueing hanging/stalled outbox messages.
+	RequeueDelay time.Duration
+
+	// Interval period for removing completed outbox messages.
+	CompletedRetentionPeriod time.Duration
+
+	// Interval period for removing failed outbox messages to dead letter queue.
+	FailedRetentionPeriod time.Duration
 
 	// Limit for fetching outbox messages
 	FetchLimit int
 
-	// Allows multiple messages with the same Kafka key to exist in the outbox queue.
-	// However, it ensures that only one message per Kafka key is processed at any given time, enforcing at-most-once processing per kafka key.
-	// Enable this option if the order of Kafka messages by key is important and only one record per key should be processed at any given time.
-	KafkaSingleKeyProcessing bool
+	// FifoKafkaKeyProcessing is designed to enhance message processing for kafka records,
+	// particularly when dealing with message ordering of kafka keys.
+	//
+	// Ensures FIFO processing of messages per kafka key.
+	// Only one batch of messages per kafka key is processed at any given time,
+	// and messages are processed in the order they were received.
+	// Messages also must finish before more messages with same kafka key can be retrieved.
+	// Or if messages all being processed for the kafka key reach TTL.
+	//
+	// Enable to prevent the outbox process from processing messages with the same kafka key concurrently.
+	//
+	// At most 10 keys per 10 messages can be processed. Making FetchLimit void in this case.
+	FifoKafkaKeyProcessing bool
 
-	// Enables deduplication of Kafka records based on (key, payload, and topic).
-	// When enabled, this setting ensures that exactly once processing of Kafka record
-	// with the same key, payload, and topic is allowed in the queue at any given time.
-	// Enable this option if deduplication of Kafka records is important for your processing logic.
-	// Pairing with EnableSingleKeyProcessing achieves stronger exactly-once semantics by
-	// combining deduplication with ordered execution, reducing the risk of reprocessing the same record.
-	KafkaRecordDeduplication bool
+	// Enables deduplication of Kafka records based on (key, payload, and topic) using SHA-256 hashing.
+	// When enabled, this setting ensures exactly once processing of messages where prcoessing duplicates
+	// isnt accepatble.
+	//
+	// Enable this option if deduplication of Kafka records is important for processing logic.
+	//
+	// Pairing with FifoKafkaKeyProcessing achieves FIFO processing with exactly-once semantics.
+	// By combining deduplication with ordered execution per kafka key.
+	MessageDeduplication bool
+
+	// The number of outbox messages to buffer.
+	// Defaults to 256.
+	ChannelBufferSize int
 
 	/////////////////////
 	// GENERAL SECTION //
@@ -45,10 +66,10 @@ type ConfigFunc func(c *Config)
 
 func NewConfig(opts ...ConfigFunc) *Config {
 	c := &Config{
-		PollInterval:             time.Duration(15) * time.Second,
-		StalledInterval:          time.Duration(2) * time.Minute,
-		KafkaSingleKeyProcessing: false,
-		KafkaRecordDeduplication: false,
+		QueueDelay:             time.Duration(5) * time.Second,
+		RequeueDelay:           time.Duration(2) * time.Minute,
+		FifoKafkaKeyProcessing: false,
+		MessageDeduplication:   false,
 	}
 
 	for _, opt := range opts {
@@ -60,13 +81,13 @@ func NewConfig(opts ...ConfigFunc) *Config {
 
 func WithJobPollInterval(interval time.Duration) ConfigFunc {
 	return func(c *Config) {
-		c.PollInterval = interval
+		c.QueueDelay = interval
 	}
 }
 
 func WithJobStallPollInterval(interval time.Duration) ConfigFunc {
 	return func(c *Config) {
-		c.StalledInterval = interval
+		c.RequeueDelay = interval
 	}
 }
 
@@ -90,12 +111,12 @@ func WithTLSConfig(tlsConfig *tls.Config) ConfigFunc {
 
 func WithKafkaSingleKeyProcessing(exactlyOnceKeyProcessing bool) ConfigFunc {
 	return func(c *Config) {
-		c.KafkaSingleKeyProcessing = exactlyOnceKeyProcessing
+		c.FifoKafkaKeyProcessing = exactlyOnceKeyProcessing
 	}
 }
 
 func WithKafkaRecordDeduplication(exactlyOnceRecordProcessing bool) ConfigFunc {
 	return func(c *Config) {
-		c.KafkaRecordDeduplication = exactlyOnceRecordProcessing
+		c.MessageDeduplication = exactlyOnceRecordProcessing
 	}
 }

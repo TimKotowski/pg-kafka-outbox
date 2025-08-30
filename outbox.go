@@ -12,7 +12,7 @@ import (
 type Outbox struct {
 	ctx        context.Context
 	conf       *Config
-	repository repository.Repository
+	repository repository.OutboxDB
 	db         *bun.DB
 	worker     *worker
 }
