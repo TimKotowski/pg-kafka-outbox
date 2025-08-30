@@ -19,26 +19,23 @@ type Config struct {
 	// Limit for fetching outbox messages
 	FetchLimit int
 
-	// KafkaSingleKeyProcessing is designed to enhance message processing for kafka records
-	// when the order of operations at a per kafka key level is critical.
+	// This ensures at-most-once processing semantics per kafka key,
+	// while preserving processing order for messages with the same key.
 	//
-	// Ensures FIFO processing of messages per kafka key.
-	// Only one batch of messages per key is processed at a time, and messages are delivered in the order they were received.
+	// Enable to prevent multiple workers from processing messages with the same key concurrently.
+	// And ensuring messages that are already being processing must finish before
+	// more messages with same keys can be retrieved, or if timeout occurs.
 	//
-	// Enable to prevent the outbox process from processing messages with the same kafka key concurrently.
+	// At most 10 keys and 10 messages per key can be retrieved.
 	//
-	// Messages with the same kafka key that are already being processed
-	// must finish before more messages with same kafka key can be retrieved,
-	// or if messages all being processed for the kafka key reach TTL (StalledInterval).
-	//
-	// At most 5 keys per 20 messages can be processed. Making FetchLimit void in this case.
+	// If ordering semantics at the time of enqueueing messages art a per kafka key is important
+	// Enable this option to ensure only on worker can procress a key at any given time.
 	KafkaSingleKeyProcessing bool
 
 	// Enables deduplication of Kafka records based on (key, payload, and topic).
-	// When enabled, this setting ensures that exactly once processing of Kafka record.
-	//
+	// When enabled, this setting ensures that exactly once processing of Kafka record
+	// with the same key, payload, and topic is allowed in the queue at any given time.
 	// Enable this option if deduplication of Kafka records is important for your processing logic.
-	//
 	// Pairing with EnableSingleKeyProcessing achieves stronger exactly-once semantics by
 	// combining deduplication with ordered execution, reducing the risk of reprocessing the same record.
 	KafkaRecordDeduplication bool
