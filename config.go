@@ -30,7 +30,7 @@ type Config struct {
 	//
 	// Ensures FIFO processing of messages per kafka key.
 	// Only one batch of messages per kafka key is processed at any given time,
-	// and messages are delivered in the order they were received.
+	// and messages are processed in the order they were received.
 	// Messages also must finish before more messages with same kafka key can be retrieved.
 	// Or if messages all being processed for the kafka key reach TTL.
 	//
