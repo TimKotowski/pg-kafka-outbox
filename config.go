@@ -6,42 +6,48 @@ import (
 )
 
 type Config struct {
-	//////////////////////
+	//////////////////////////
 	// OUTBOX QUEUE SECTION //
-	//////////////////////
+	/////////////////////////
 
 	// Interval rate for polling outbox messages.
-	PollInterval time.Duration
+	QueueDelay time.Duration
 
-	// Interval rate for requeueing hanging/stalled outbox messages.
-	StalledInterval time.Duration
+	// Interval period for requeueing hanging/stalled outbox messages.
+	RequeueDelay time.Duration
+
+	// Interval period for removing completed outbox messages.
+	CompletedRetentionPeriod time.Duration
+
+	// Interval period for removing failed outbox messages to dead letter queue.
+	FailedRetentionPeriod time.Duration
 
 	// Limit for fetching outbox messages
 	FetchLimit int
 
-	// KafkaSingleKeyProcessing is designed to enhance message processing for kafka records
-	// when the order of operations at a per kafka key level is critical.
+	// FifoKafkaKeyProcessing is designed to enhance message processing for kafka records,
+	// particularly when dealing with message ordering of kafka keys.
 	//
 	// Ensures FIFO processing of messages per kafka key.
-	// Only one batch of messages per key is processed at a time, and messages are delivered in the order they were received.
+	// Only one batch of messages per kafka key is processed at any given time,
+	// and messages are delivered in the order they were received.
+	// Messages also must finish before more messages with same kafka key can be retrieved.
+	// Or if messages all being processed for the kafka key reach TTL.
 	//
 	// Enable to prevent the outbox process from processing messages with the same kafka key concurrently.
 	//
-	// Messages with the same kafka key that are already being processed
-	// must finish before more messages with same kafka key can be retrieved,
-	// or if messages all being processed for the kafka key reach TTL (StalledInterval).
-	//
-	// At most 5 keys per 20 messages can be processed. Making FetchLimit void in this case.
-	KafkaSingleKeyProcessing bool
+	// At most 10 keys per 10 messages can be processed. Making FetchLimit void in this case.
+	FifoKafkaKeyProcessing bool
 
-	// Enables deduplication of Kafka records based on (key, payload, and topic).
-	// When enabled, this setting ensures that exactly once processing of Kafka record.
+	// Enables deduplication of Kafka records based on (key, payload, and topic) using SHA-256 hashing.
+	// When enabled, this setting ensures exactly once processing of messages where prcoessing duplicates
+	// isnt accepatble.
 	//
-	// Enable this option if deduplication of Kafka records is important for your processing logic.
+	// Enable this option if deduplication of Kafka records is important for processing logic.
 	//
-	// Pairing with EnableSingleKeyProcessing achieves stronger exactly-once semantics by
-	// combining deduplication with ordered execution, reducing the risk of reprocessing the same record.
-	KafkaRecordDeduplication bool
+	// Pairing with FifoKafkaKeyProcessing achieves FIFO processing with exactly-once semantics.
+	// By combining deduplication with ordered execution per kafka key.
+	MessageDeduplication bool
 
 	// The number of outbox messages to buffer.
 	// Defaults to 256.
@@ -60,10 +66,10 @@ type ConfigFunc func(c *Config)
 
 func NewConfig(opts ...ConfigFunc) *Config {
 	c := &Config{
-		PollInterval:             time.Duration(5) * time.Second,
-		StalledInterval:          time.Duration(2) * time.Minute,
-		KafkaSingleKeyProcessing: false,
-		KafkaRecordDeduplication: false,
+		QueueDelay:             time.Duration(5) * time.Second,
+		RequeueDelay:           time.Duration(2) * time.Minute,
+		FifoKafkaKeyProcessing: false,
+		MessageDeduplication:   false,
 	}
 
 	for _, opt := range opts {
@@ -75,13 +81,13 @@ func NewConfig(opts ...ConfigFunc) *Config {
 
 func WithJobPollInterval(interval time.Duration) ConfigFunc {
 	return func(c *Config) {
-		c.PollInterval = interval
+		c.QueueDelay = interval
 	}
 }
 
 func WithJobStallPollInterval(interval time.Duration) ConfigFunc {
 	return func(c *Config) {
-		c.StalledInterval = interval
+		c.RequeueDelay = interval
 	}
 }
 
@@ -105,12 +111,12 @@ func WithTLSConfig(tlsConfig *tls.Config) ConfigFunc {
 
 func WithKafkaSingleKeyProcessing(exactlyOnceKeyProcessing bool) ConfigFunc {
 	return func(c *Config) {
-		c.KafkaSingleKeyProcessing = exactlyOnceKeyProcessing
+		c.FifoKafkaKeyProcessing = exactlyOnceKeyProcessing
 	}
 }
 
 func WithKafkaRecordDeduplication(exactlyOnceRecordProcessing bool) ConfigFunc {
 	return func(c *Config) {
-		c.KafkaRecordDeduplication = exactlyOnceRecordProcessing
+		c.MessageDeduplication = exactlyOnceRecordProcessing
 	}
 }

@@ -35,7 +35,7 @@ func newWorker(ctx context.Context, config *Config, repo repository.OutboxDB) *w
 }
 
 func (w *worker) start() {
-	ticker := time.NewTicker(w.config.StalledInterval)
+	ticker := time.NewTicker(w.config.RequeueDelay)
 
 	for {
 		select {
