@@ -23,7 +23,7 @@ type consumer struct {
 	ctx        context.Context
 	conf       *Config
 	outbox     *Outbox
-	repository repository.Repository
+	repository repository.OutboxDB
 }
 
 func NewConsumer(outbox *Outbox) ConsumerHandler {

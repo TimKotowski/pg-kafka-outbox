@@ -9,13 +9,15 @@ import (
 type Status = string
 
 const (
-	SCHEDULED Status = "SCHEDULED"
-	COMPLETED Status = "COMPLETED"
-	FAILED    Status = "FAILED"
+	PENDING       Status = "PENDING"
+	SUCCESSFUL    Status = "SUCCESSFUL"
+	FAILED        Status = "FAILED"
+	RUNNING       Status = "RUNNING"
+	PENDING_RETRY Status = "PENDING_RETRY"
 )
 
-type Job struct {
-	bun.BaseModel `bun:"table:jobs"`
+type Message struct {
+	bun.BaseModel `bun:"table:outbox"`
 
 	JobID      string    `bun:"job_id,pk"`
 	Topic      string    `bun:"topic, notnull"`
@@ -30,4 +32,9 @@ type Job struct {
 	CreatedAt  time.Time `bun:"created_at, notnull"`
 	StartedBy  string    `bun:"started_by, notnull"`
 	StartedAt  string    `bun:"started_at, notnull"`
+}
+
+type AdvisoryXactLock struct {
+	Key    string `bun:"key"`
+	Locked bool   `bun:"locked"`
 }

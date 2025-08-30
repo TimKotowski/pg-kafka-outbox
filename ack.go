@@ -23,10 +23,10 @@ type Acknowledger interface {
 }
 
 type ackAcknowledgement struct {
-	repository repository.Repository
+	repository repository.OutboxDB
 }
 
-func newAcknowledgement(repository repository.Repository) Acknowledger {
+func newAcknowledgement(repository repository.OutboxDB) Acknowledger {
 	return &ackAcknowledgement{
 		repository: repository,
 	}

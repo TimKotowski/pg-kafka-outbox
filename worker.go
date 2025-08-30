@@ -20,11 +20,11 @@ type worker struct {
 	state                atomic.Uint32
 	ctx                  context.Context
 	config               *Config
-	repository           repository.Repository
+	repository           repository.OutboxDB
 	acknowledgedMessages chan Message
 }
 
-func newWorker(ctx context.Context, config *Config, repo repository.Repository) *worker {
+func newWorker(ctx context.Context, config *Config, repo repository.OutboxDB) *worker {
 	return &worker{
 		availableWorkers: availableWorkers,
 		ctx:              ctx,

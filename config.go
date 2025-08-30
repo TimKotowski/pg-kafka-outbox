@@ -32,6 +32,10 @@ type Config struct {
 	// combining deduplication with ordered execution, reducing the risk of reprocessing the same record.
 	KafkaRecordDeduplication bool
 
+	// The number of outbox messages to buffer.
+	// Defaults to 256.
+	ChannelBufferSize int
+
 	/////////////////////
 	// GENERAL SECTION //
 	/////////////////////
@@ -45,7 +49,7 @@ type ConfigFunc func(c *Config)
 
 func NewConfig(opts ...ConfigFunc) *Config {
 	c := &Config{
-		PollInterval:             time.Duration(15) * time.Second,
+		PollInterval:             time.Duration(5) * time.Second,
 		StalledInterval:          time.Duration(2) * time.Minute,
 		KafkaSingleKeyProcessing: false,
 		KafkaRecordDeduplication: false,
