@@ -49,7 +49,7 @@ func (c *consumer) StartConsumer(consumer Consumer) error {
 }
 
 func (c *consumer) consume(recv *consumerClaim) {
-	ticker := time.NewTicker(c.conf.PollInterval)
+	ticker := time.NewTicker(c.conf.QueueDelay)
 	for {
 		select {
 		// Allows context passing for graceful closure of channels.
