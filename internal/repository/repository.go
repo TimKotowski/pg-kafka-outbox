@@ -12,9 +12,17 @@ type OutboxDB interface {
 	// GetPendingMessages find any pendng messages that need to be processed.
 	GetPendingMessages(ctx context.Context) ([]Message, error)
 
-	// GetPendingMessagesByUniqueKey finds at most one pending message per unique key, that arn't already being processed.
-	// This ensures at-most-once semantics for processing messages, where process ordering is needed.
-	GetPendingMessagesByUniqueKey(ctx context.Context) ([]Message, error)
+	// AcquirePendingMessagesByKey retrieves pending messages for each unique key, that arn't curently being processed.
+	//
+	// This ensures at-most-once processing semantics per kafka key,
+	// while preserving processing order for messages with the same key.
+	//
+	// The function uses advisory locks to prevent multiple workers from processing
+	// messages with the same key concurrently. Messages that are processing must finish
+	// before more messages with same keys can be retrieved.
+	//
+	// At most 10 keys and 10 messages per key can be retrieved.
+	AcquirePendingMessagesByKey(ctx context.Context) ([]Message, error)
 
 	// GetUniqueKeys finds unique keys that have no processing messages already.
 	GetUniqueKeys(ctx context.Context) ([]string, error)
@@ -60,7 +68,7 @@ func (r *repository) UpdateMessageStatus(ctx context.Context, message Message) e
 	return nil
 }
 
-func (r *repository) GetPendingMessagesByUniqueKey(ctx context.Context) ([]Message, error) {
+func (r *repository) AcquirePendingMessagesByKey(ctx context.Context) ([]Message, error) {
 	messages, err := RunInTxWithReturnType(ctx, r.db, func(tx bun.Tx) ([]Message, error) {
 		var messages []Message
 		// Get unique keys that are not already being processed.
@@ -74,7 +82,7 @@ func (r *repository) GetPendingMessagesByUniqueKey(ctx context.Context) ([]Messa
 		}
 
 		fmt.Println(acquiredLocks)
-		// Query to get messages by keyc that were locked
+		// Query to get messages by key that were locked.
 
 		return messages, nil
 	})
