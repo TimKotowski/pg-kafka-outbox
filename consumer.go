@@ -40,6 +40,7 @@ func NewConsumer(outbox *Outbox) ConsumerHandler {
 func (c *consumer) StartConsumer(consumer Consumer) error {
 	receiver := newConsumerClaim(c.conf)
 	ack := newAcknowledgement(c.repository)
+	c.repository.GetEligibleKeysByGroupIds()
 
 	go consumer.Consume(c.ctx, ack, receiver)
 

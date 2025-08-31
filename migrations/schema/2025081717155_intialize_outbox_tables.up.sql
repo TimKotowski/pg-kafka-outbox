@@ -7,12 +7,13 @@ CREATE TYPE status AS ENUM (
 );
 
 CREATE TABLE IF NOT EXISTS outbox (
-  job_id varchar(26),
+  job_id text,
   topic text not null,
   key bytea,
   payload bytea,
   partition int,
   headers bytea,
+  group_id text not null,
   status status not null,
   retries int not null,
   max_retries int not null,
@@ -24,12 +25,13 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 
 CREATE TABLE IF NOT EXISTS dead_letter_outbox (
-  job_id varchar(26),
+  job_id text,
   topic text not null,
   key bytea,
   payload bytea,
   partition int,
   headers bytea,
+  group_id text not null,
   status status not null,
   retries int not null,
   max_retries int not null,
@@ -42,4 +44,5 @@ CREATE TABLE IF NOT EXISTS dead_letter_outbox (
 
 CREATE INDEX outbox_status_idx on outbox(status);
 CREATE INDEX outbox_fingerprint_idx on outbox(fingerprint);
+CREATE INDEX outbox_group_id_idx on outbox(group_id);
 CREATE INDEX outbox_partial_idx on outbox(created_at) where status IN ('PENDING', 'PENDING_RETRY');

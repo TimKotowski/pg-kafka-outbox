@@ -2,8 +2,8 @@ package repository
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/TimKotowski/pg-kafka-outbox/hash"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 )
@@ -20,8 +20,8 @@ type OutboxDB interface {
 	// 3. Messages are processed in the order they were received.
 	GetPendingMessagesFIFO(ctx context.Context) ([]Message, error)
 
-	// GetUniqueKeys finds unique keys that have no processing messages already.
-	GetUniqueKeys(ctx context.Context) ([]string, error)
+	// GetEligibleKeys finds unique keys that have no processing messages already.
+	GetEligibleKeysByGroupIds(ctx context.Context) ([]string, error)
 
 	// ExistsByFingerprint finds any messages with same fingerpring that are pending or being processed.
 	// This ensures messages with the same fingerprint cant enter the outbox.
@@ -66,19 +66,45 @@ func (r *repository) UpdateMessageStatus(ctx context.Context, message Message) e
 
 func (r *repository) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error) {
 	messages, err := RunInTxWithReturnType(ctx, r.db, func(tx bun.Tx) ([]Message, error) {
-		var messages []Message
 		// Get unique keys that are not already being processed.
-
-		// Hash keys to allow right advisory lock type.
-
-		// Try acquire advisory lock
-		acquiredLocks, err := r.tryAdvisoryXactLock([]uint64{}, tx)
+		elibleKeys, err := r.GetEligibleKeysByGroupIds(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		fmt.Println(acquiredLocks)
+		// Hash keys to allow right advisory lock type.
+		var advisorytLockHashedKeys []uint64
+		for _, key := range elibleKeys {
+			xactHash, err := hash.GenerateAdvisoryLockHash(key)
+			if err != nil {
+				continue
+			}
+			advisorytLockHashedKeys = append(advisorytLockHashedKeys, xactHash)
+		}
+
+		// Try acquire advisory lock
+		acquiredGroupIDLocks, err := r.tryAdvisoryXactLock(advisorytLockHashedKeys, tx)
+		if err != nil {
+			return nil, err
+		}
+
+		var messages []Message
+
 		// Query to get messages by key that were locked.
+		subQuery := r.db.NewSelect().
+			TableExpr("outbox as o").
+			ColumnExpr("o.*").
+			ColumnExpr("ROW_NUMBER() OVER (PARTITION BY o.group_id ORDER BY o.created_at) AS rn").
+			Where("group_id IN (?)", bun.In(acquiredGroupIDLocks)).
+			Where("o.status IN (?)", bun.In([]string{PENDING, PENDING_RETRY}))
+
+		err = r.db.NewSelect().
+			TableExpr("(?) as sub", subQuery).
+			Where("rn <= 10=").
+			Scan(ctx, &messages)
+		if err != nil {
+			return nil, err
+		}
 
 		return messages, nil
 	})
@@ -93,15 +119,26 @@ func (r *repository) ExistsByFingerprint(ctx context.Context, fingerprint []byte
 	return false, nil
 }
 
-func (r *repository) GetUniqueKeys(ctx context.Context) ([]string, error) {
-	return nil, nil
+func (r *repository) GetEligibleKeysByGroupIds(ctx context.Context) ([]string, error) {
+	var groupId []string
+
+	if err := r.db.NewSelect().
+		Table("outbox").
+		ColumnExpr("DISTINCT group_id").
+		Where("status IN (?)", bun.In([]string{PENDING, PENDING_RETRY})).
+		Limit(10).
+		Scan(ctx, &groupId); err != nil {
+		return nil, err
+	}
+
+	return groupId, nil
 }
 
 // tryAdvisoryXactLock finds unique keys that obtained an xact advisoy lock key ordering semantics.
 func (r *repository) tryAdvisoryXactLock(keys []uint64, tx bun.Tx) ([]string, error) {
 	ctx := context.Background()
 	var xacts []AdvisoryXactLock
-	acquiredLocks := []string{}
+	var acquiredGroupIDLocks []string
 
 	if err := tx.NewSelect().
 		Column("tx.id").
@@ -113,9 +150,9 @@ func (r *repository) tryAdvisoryXactLock(keys []uint64, tx bun.Tx) ([]string, er
 
 	for _, key := range xacts {
 		if key.Locked {
-			acquiredLocks = append(acquiredLocks, key.Key)
+			acquiredGroupIDLocks = append(acquiredGroupIDLocks, key.Key)
 		}
 	}
 
-	return acquiredLocks, nil
+	return acquiredGroupIDLocks, nil
 }

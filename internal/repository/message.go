@@ -25,6 +25,7 @@ type Message struct {
 	Payload    []byte    `bun:"payload"`
 	Partition  *int      `bun:"partition"`
 	Headers    []byte    `bun:"headers"`
+	GroupID    string    `bun:"group_id, notnull"`
 	Status     Status    `bun:"status, notnull"`
 	Retries    int       `bun:"retries, notnull"`
 	MaxRetries int       `bun:"max_retries, notnull"`
