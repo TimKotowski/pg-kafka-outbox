@@ -8,6 +8,10 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
+const (
+	FifoLimit = 10
+)
+
 type OutboxDB interface {
 	// GetPendingMessages find any pendng messages that need to be processed.
 	GetPendingMessages(ctx context.Context) ([]Message, error)
@@ -100,7 +104,7 @@ func (r *repository) GetPendingMessagesFIFO(ctx context.Context) ([]Message, err
 
 		err = r.db.NewSelect().
 			TableExpr("(?) as sub", subQuery).
-			Where("rn <= 10=").
+			Where("rn <= (?)", FifoLimit).
 			Scan(ctx, &messages)
 		if err != nil {
 			return nil, err
