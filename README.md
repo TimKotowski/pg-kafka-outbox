@@ -10,4 +10,3 @@ the outbox pattern. Supports arbitrary binary data. Can be configured to
 3. Supports high throughput of messages, by leveraging the ability to spawn as many consumers as needed.
 Each consumer is isolated, supporting less message congestion through one channel. Paired with NON FIFO processing of messages,
 where ordering isn't critical.
-   
