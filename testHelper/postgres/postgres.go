@@ -7,12 +7,14 @@ import (
 	"testing"
 	"time"
 
-	outbox "github.com/TimKotowski/pg-kafka-outbox"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/ory/dockertest"
 	"github.com/ory/dockertest/docker"
 	"github.com/stretchr/testify/assert"
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
 const (
@@ -88,12 +90,31 @@ func pgIsReady(pool *dockertest.Pool, dsn string) (*bun.DB, error) {
 	var db *bun.DB
 
 	if err := pool.Retry(func() error {
-		db, err = outbox.GetDBConnection(outbox.NewConfig(outbox.WithDSN(dsn)))
+		db, err = getDatabase(dsn)
 		if err != nil {
 			return err
 		}
 		return db.Ping()
 	}); err != nil {
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func getDatabase(dsn string) (*bun.DB, error) {
+	pgxCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse connection due to %w", err)
+	}
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), pgxCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	db := bun.NewDB(stdlib.OpenDBFromPool(pool), pgdialect.New())
+	if err = db.Ping(); err != nil {
 		return nil, err
 	}
 

@@ -4,15 +4,14 @@ import (
 	"context"
 	"errors"
 
-	"github.com/TimKotowski/pg-kafka-outbox/internal/repository"
-	"github.com/TimKotowski/pg-kafka-outbox/migrations"
+	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 	"github.com/uptrace/bun"
 )
 
 type Outbox struct {
 	ctx        context.Context
 	conf       *Config
-	repository repository.OutboxDB
+	repository outboxdb.OutboxDB
 	db         *bun.DB
 	worker     *worker
 }
@@ -23,7 +22,7 @@ func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
 		return nil, err
 	}
 
-	repository := repository.NewRepository(db)
+	repository := outboxdb.NewRepository(db)
 	worker := newWorker(ctx, conf, repository)
 
 	return &Outbox{
@@ -40,7 +39,7 @@ func (o *Outbox) Init() error {
 		return errors.New("initalizing outbox already occured, and outbox is activley running")
 	}
 
-	if err := migrations.Migrate(o.ctx, o.db); err != nil {
+	if err := migrations.migrate(o.ctx, o.db); err != nil {
 		return err
 	}
 

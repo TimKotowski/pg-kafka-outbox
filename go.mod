@@ -1,10 +1,9 @@
 module github.com/TimKotowski/pg-kafka-outbox
 
-go 1.24.3
+go 1.24
 
 require (
 	github.com/jackc/pgx/v5 v5.7.5
-	github.com/oklog/ulid/v2 v2.1.1
 	github.com/ory/dockertest v3.3.5+incompatible
 	github.com/stretchr/testify v1.10.0
 	github.com/uptrace/bun v1.2.15
@@ -28,6 +27,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/moby/sys/user v0.4.0 // indirect
+	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/opencontainers/runc v1.3.0 // indirect

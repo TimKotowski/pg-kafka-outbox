@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/TimKotowski/pg-kafka-outbox/internal/repository"
+	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 )
 
 type Consumer interface {
@@ -23,7 +23,7 @@ type consumer struct {
 	ctx        context.Context
 	conf       *Config
 	outbox     *Outbox
-	repository repository.OutboxDB
+	repository outboxdb.OutboxDB
 }
 
 func NewConsumer(outbox *Outbox) ConsumerHandler {
@@ -40,7 +40,6 @@ func NewConsumer(outbox *Outbox) ConsumerHandler {
 func (c *consumer) StartConsumer(consumer Consumer) error {
 	receiver := newConsumerClaim(c.conf)
 	ack := newAcknowledgement(c.repository)
-	c.repository.GetEligibleKeysByGroupIds()
 
 	go consumer.Consume(c.ctx, ack, receiver)
 

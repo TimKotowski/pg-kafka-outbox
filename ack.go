@@ -1,8 +1,6 @@
 package outbox
 
-import (
-	"github.com/TimKotowski/pg-kafka-outbox/internal/repository"
-)
+import "github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 
 type Acknowledgement struct {
 	Status string
@@ -23,10 +21,10 @@ type Acknowledger interface {
 }
 
 type ackAcknowledgement struct {
-	repository repository.OutboxDB
+	repository outboxdb.OutboxDB
 }
 
-func newAcknowledgement(repository repository.OutboxDB) Acknowledger {
+func newAcknowledgement(repository outboxdb.OutboxDB) Acknowledger {
 	return &ackAcknowledgement{
 		repository: repository,
 	}

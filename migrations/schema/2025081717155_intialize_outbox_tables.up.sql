@@ -1,7 +1,7 @@
 CREATE TYPE status AS ENUM (
 'PENDING',
 'RUNNING',
-'SUCCESSFUL',
+'COMPLETED',
 'FAILED',
 'PENDING_RETRY'
 );
@@ -13,12 +13,14 @@ CREATE TABLE IF NOT EXISTS outbox (
   payload bytea,
   partition int,
   headers bytea,
-  group_id text not null,
   status status not null,
   retries int not null,
   max_retries int not null,
-  fingerprint bytea not null,
+  group_id text not null,
+  fingerprint text not null,
   created_at timestamptz not null,
+  updated_at timestamptz not null,
+  completed_at timestamptz,
   started_at timestamptz,
 
   constraint pk_outbox_jobs primary key(job_id)
@@ -31,12 +33,14 @@ CREATE TABLE IF NOT EXISTS dead_letter_outbox (
   payload bytea,
   partition int,
   headers bytea,
-  group_id text not null,
   status status not null,
   retries int not null,
   max_retries int not null,
-  fingerprint bytea not null,
+  group_id text not null,
+  fingerprint text not null,
   created_at timestamptz not null,
+  updated_at timestamptz not null,
+  completed_at timestamptz,
   started_at timestamptz not null,
 
   constraint pk_dead_letter_outbox primary key(job_id)
