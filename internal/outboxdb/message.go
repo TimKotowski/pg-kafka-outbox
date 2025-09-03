@@ -56,6 +56,6 @@ func (m *Message) BeforeAppendModel(ctx context.Context, query bun.Query) error 
 }
 
 type AdvisoryXactLock struct {
-	Key    string `bun:"key"`
-	Locked bool   `bun:"locked"`
+	GroupID uint64 `bun:"group_id"`
+	Locked  bool   `bun:"locked"`
 }

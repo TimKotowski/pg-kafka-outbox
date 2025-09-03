@@ -57,47 +57,63 @@ func (r *outboxDB) GetPendingMessages(ctx context.Context) ([]Message, error) {
 
 func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error) {
 	messages, err := RunInTxWithReturnType(ctx, r.db, func(tx bun.Tx) ([]Message, error) {
-		// Keep trying until keys can be locked and processed or there is none to process.
-		// Could be due to wother works getting locks on keys causing other workers to no get any messagess.
-		for {
-			// Get unique keys that are not already being processed.
-			elibleKeys, err := r.getEligibleGroupIds(ctx)
+		// Get unique keys that are not already being processed.
+		elibleKeys, err := r.getEligibleGroupIdsTx(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if len(elibleKeys) == 0 {
+			return nil, nil
+		}
+
+		distributedLockMap := make(map[uint64]string, 0)
+		var advisorytLockHashedKeys []uint64
+		for _, key := range elibleKeys {
+			xactHash, err := getAdvisoryLockForGroupID(key)
 			if err != nil {
-				return nil, err
-			}
-			if len(elibleKeys) == 0 {
-				return nil, nil
-			}
-
-			var advisorytLockHashedKeys []uint64
-			for _, key := range elibleKeys {
-				xactHash, err := getAdvisoryLockForGroupID(key)
-				if err != nil {
-					continue
-				}
-				advisorytLockHashedKeys = append(advisorytLockHashedKeys, xactHash)
-			}
-
-			// Try acquire advisory lock
-			acquiredGroupIDLocks, err := r.withDistributedLocks(advisorytLockHashedKeys, tx)
-			if err != nil {
-				return nil, err
-			}
-
-			if len(acquiredGroupIDLocks) == 0 {
-				fmt.Println("unable to obtain any locks, trying again")
 				continue
 			}
-
-			fmt.Printf("acquired %d locks", len(acquiredGroupIDLocks))
-			// Query to get messages by key that were locked.
-			messages, err := r.getPendingMessagesFIFO(ctx, acquiredGroupIDLocks)
-			if err != nil {
-				return nil, err
-			}
-
-			return messages, nil
+			distributedLockMap[xactHash] = key
+			advisorytLockHashedKeys = append(advisorytLockHashedKeys, xactHash)
 		}
+
+		// Try acquire advisory lock
+		acquiredGroupIDLocks, err := r.withDistributedLocksTx(ctx, advisorytLockHashedKeys, tx)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO: Re-check eligibility for acquired group IDs under the advisory lock to prevent processing stale groups that may already be running.
+		// In the initial eligibility query (getEligibleGroupIdsTx), a worker could fetch groups with PENDING/PENDING_RETRY messages that dont have any running already.
+		// However, another worker that has a lock, could commit its transaction, update messages with groupids to RUNNING, and release the lock.
+		// But if another worker then acquires the now-free lock, it might of already fetched same eligibile groupids right before the previous
+		// worker holding a advisory lock on same groupids updated its messages to be running and committed the transaction for its groupids.
+		// Due to concurrency timing issues, leading to new batch of messages but with the same groupids to also be updated to RUNNING when it shouldnt.
+		// This violates the invariant of only one batch per group processing at a time, until the full batch completed/failed/requeued.
+		// After lock acquisition, just re-query locked groupids check again, for RUNNING count per group. skip if >0.
+		// Due to FIFO behavior on group ids, and many rows can have same group ids since its a hash on  (kafka key, topic), FOR UPDATE
+		// really can be applicatable here. Due to wanting correct ordering semanctics per kafka key/topic and making sure that batch
+		// finishes nefore processing more.
+		if len(acquiredGroupIDLocks) == 0 {
+			fmt.Println("unable to obtain any locks, trying again")
+		}
+
+		fmt.Printf("acquired %d locks", len(acquiredGroupIDLocks))
+
+		var lookUpGID []string
+		for _, lock := range acquiredGroupIDLocks {
+			if val, ok := distributedLockMap[lock]; ok {
+				lookUpGID = append(lookUpGID, val)
+			}
+		}
+
+		// Query to get messages by key that were locked.
+		messages, err := r.getPendingMessagesFIFOTx(ctx, lookUpGID, tx)
+		if err != nil {
+			return nil, err
+		}
+
+		return messages, nil
 	})
 	if err != nil {
 		return nil, err
@@ -122,19 +138,20 @@ func (r *outboxDB) ExistsByFingerprint(ctx context.Context, fingerprint []byte) 
 	return false, nil
 }
 
-func (r *outboxDB) getPendingMessagesFIFO(ctx context.Context, acquiredGroupIDLocks []string) ([]Message, error) {
+func (r *outboxDB) getPendingMessagesFIFOTx(ctx context.Context, acquiredGroupIDLocks []string, tx bun.IDB) ([]Message, error) {
 	var messages []Message
-	subQuery := r.db.NewSelect().
+	subQuery := tx.NewSelect().
 		TableExpr("outbox as o").
 		ColumnExpr("o.*").
 		ColumnExpr("ROW_NUMBER() OVER (PARTITION BY o.group_id ORDER BY o.created_at) AS rn").
 		Where("group_id IN (?)", bun.In(acquiredGroupIDLocks)).
 		Where("o.status IN (?)", bun.In([]string{PENDING, PENDING_RETRY}))
 
-	err := r.db.NewSelect().
+	err := tx.NewSelect().
+		Model(&messages).
 		TableExpr("(?) as sub", subQuery).
 		Where("rn <= (?)", FifoLimit).
-		Scan(ctx, &messages)
+		Scan(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -142,15 +159,26 @@ func (r *outboxDB) getPendingMessagesFIFO(ctx context.Context, acquiredGroupIDLo
 }
 
 // getEligibleKeys finds unique keys that have no processing messages already.
-func (r *outboxDB) getEligibleGroupIds(ctx context.Context) ([]string, error) {
+func (r *outboxDB) getEligibleGroupIdsTx(ctx context.Context, tx bun.IDB) ([]string, error) {
 	var groupID []string
 
-	if err := r.db.NewSelect().
-		Table("outbox").
-		ColumnExpr("DISTINCT group_id").
+	subQuery := tx.NewSelect().
+		TableExpr("SELECT 1 FROM outbox").
+		Where("group_id = outbox.group_id").
+		Where("and status = (?)", RUNNING)
+
+	sub := tx.NewSelect().
+		TableExpr("outbox").
+		Column("group_id").
 		Where("status IN (?)", bun.In([]string{PENDING, PENDING_RETRY})).
-		Order("created_at ASC").
-		Limit(10).
+		Where("NOT EXISTS (?)", subQuery).
+		Group("group_id").
+		OrderExpr("MIN(created_at) ASC").
+		Limit(100)
+
+	if err := tx.NewSelect().
+		Column("sub.group_id").
+		TableExpr("(?) as sub", sub).
 		Scan(ctx, &groupID); err != nil {
 		return nil, err
 	}
@@ -159,22 +187,21 @@ func (r *outboxDB) getEligibleGroupIds(ctx context.Context) ([]string, error) {
 }
 
 // withDistrubutedLocks finds unique keys that obtained an xact advisoy lock.
-func (r *outboxDB) withDistributedLocks(keys []uint64, tx bun.Tx) ([]string, error) {
-	ctx := context.Background()
+func (r *outboxDB) withDistributedLocksTx(ctx context.Context, keys []uint64, tx bun.Tx) ([]uint64, error) {
 	var xacts []AdvisoryXactLock
-	var acquiredGroupIDLocks []string
+	var acquiredGroupIDLocks []uint64
 
 	if err := tx.NewSelect().
-		Column("tx.id").
-		ColumnExpr("pg_try_advisory_xact_lock(tx.id) as locked").
-		TableExpr("unnest(?) as tx(id)", pgdialect.Array(keys)).
+		Column("tx.group_id").
+		ColumnExpr("pg_try_advisory_xact_lock(tx.group_id) as locked").
+		TableExpr("unnest(?::bigint[]) as tx(group_id)", pgdialect.Array(keys)).
 		Scan(ctx, &xacts); err != nil {
 		return nil, err
 	}
 
 	for _, key := range xacts {
 		if key.Locked {
-			acquiredGroupIDLocks = append(acquiredGroupIDLocks, key.Key)
+			acquiredGroupIDLocks = append(acquiredGroupIDLocks, key.GroupID)
 		}
 	}
 

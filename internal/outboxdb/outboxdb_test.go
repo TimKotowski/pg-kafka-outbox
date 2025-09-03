@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/TimKotowski/pg-kafka-outbox/hash"
-	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
-	"github.com/TimKotowski/pg-kafka-outbox/testHelper/postgres"
 	"github.com/oklog/ulid/v2"
 	"github.com/ory/dockertest"
 	"github.com/stretchr/testify/assert"
+	"github.com/uptrace/bun/extra/bundebug"
+
+	"github.com/TimKotowski/pg-kafka-outbox/hash"
+	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
+	"github.com/TimKotowski/pg-kafka-outbox/testHelper/postgres"
 )
 
 func TestAdvisoryXactLock(t *testing.T) {
@@ -20,9 +22,10 @@ func TestAdvisoryXactLock(t *testing.T) {
 	resource := postgres.SetUp(pool, t)
 
 	t.Run("simple", func(t *testing.T) {
-		resource.DB.NewInsert()
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte("user-42"))
+
+		resource.DB.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
 
 		id := ulid.Make().String()
 		message := &outboxdb.Message{
@@ -43,9 +46,14 @@ func TestAdvisoryXactLock(t *testing.T) {
 		assert.NoError(t, err)
 		fmt.Println(res.RowsAffected())
 
-		var m outboxdb.Message
-		err = resource.DB.NewSelect().Model(&m).Where("job_id = ?", id).Scan(ctx)
+		rr := outboxdb.NewOutboxDB(resource.DB)
+
+		rss, err := rr.GetPendingMessagesFIFO(ctx)
 		assert.NoError(t, err)
-		fmt.Println(m)
+		fmt.Println(rss)
+		// var m outboxdb.Message
+		// err = resource.DB.NewSelect().Model(&m).Where("job_id = ?", id).Scan(ctx)
+		// assert.NoError(t, err)
+		// fmt.Println(m)
 	})
 }

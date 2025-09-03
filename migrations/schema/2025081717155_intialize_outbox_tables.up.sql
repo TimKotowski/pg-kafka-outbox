@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS dead_letter_outbox (
   constraint pk_dead_letter_outbox primary key(job_id)
 );
 
-CREATE INDEX outbox_status_idx on outbox(status);
+-- CREATE INDEX outbox_status_idx on outbox(status);
 CREATE INDEX outbox_fingerprint_idx on outbox(fingerprint);
-CREATE INDEX outbox_group_id_idx on outbox(group_id);
 CREATE INDEX outbox_partial_idx on outbox(created_at) where status IN ('PENDING', 'PENDING_RETRY');
+create INDEX outbox_status_group_id_created_at_idx ON outbox (status, group_id, created_at);
