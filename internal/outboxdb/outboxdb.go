@@ -67,11 +67,11 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 				return nil, nil
 			}
 
-			lockIdToGroupIdMap := make(map[uint64]string, 0)
+			lockIdToGroupIdMap := make(map[uint64]string)
 			var advisoryLockIds []uint64
 
 			for _, groupId := range eligibleGroupIds {
-				lockId, err := getAdvisoryLockIdentifier(groupId)
+				lockId, err := r.getAdvisoryLockIdentifier(groupId)
 				if err != nil {
 					continue
 				}
@@ -87,8 +87,9 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 			if len(acquiredLockIds) == 0 {
 				fmt.Println("unable to obtain any locks, trying again")
 				continue
+			} else {
+				fmt.Printf("acquired %d locks", len(acquiredLockIds))
 			}
-			fmt.Printf("acquired %d locks", len(acquiredLockIds))
 
 			var lockedGroupIDs []string
 			for _, lockId := range acquiredLockIds {
@@ -97,32 +98,10 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 				}
 			}
 
-			var alreadyRunningGroupIds []string
-			err = tx.NewSelect().
-				TableExpr("outbox").
-				Column("group_id").
-				Where("group_id IN (?)", bun.In(lockedGroupIDs)).
-				Where("status = (?)", RUNNING).
-				Distinct().
-				Scan(ctx, &alreadyRunningGroupIds)
+			validGroupIds, err := r.reCheckEligibleGroupIdsTx(ctx, lockedGroupIDs, tx)
 			if err != nil {
 				return nil, err
 			}
-
-			seen := make(map[string]bool)
-			validGroupIds := make([]string, len(lockedGroupIDs))
-			copy(validGroupIds, lockedGroupIDs)
-
-			for _, runningGroup := range alreadyRunningGroupIds {
-				seen[runningGroup] = true
-			}
-
-			for i, lockedGroup := range lockedGroupIDs {
-				if _, ok := seen[lockedGroup]; ok {
-					validGroupIds = append(validGroupIds[:i], validGroupIds[i+1:]...)
-				}
-			}
-
 			messages, err := r.getPendingMessagesFIFOTx(ctx, validGroupIds, tx)
 			if err != nil {
 				return nil, err
@@ -200,6 +179,46 @@ func (r *outboxDB) getEligibleGroupIdsTx(ctx context.Context, tx bun.IDB) ([]str
 	return groupID, nil
 }
 
+// reCheckEligibleGroupIdsTx will recheck eligibility for acquired group IDs under the advisory lock to prevent processing stale groups that may already be running.
+// In the initial eligibility query (getEligibleGroupIdsTx), a worker could fetch groups with PENDING/PENDING_RETRY messages that don't have any running already.
+// However, another worker that has a lock, could commit its transaction, update messages with groupIds to RUNNING, and release the lock.
+// But if another worker then acquires the now-free lock, it might of already fetched same eligible groupIds right before the previous
+// worker holding a advisory lock on same groupIds updated its messages to be running and committed the transaction for its groupIds.
+// Due to concurrency timing issues, leading to new batch of messages but with the same groupIds to also be updated to RUNNING when it shouldn't.
+// This violates the invariant of only one batch per group processing at a time, until the full batch completed/failed/re-queued.
+// After lock acquisition, just re-query locked groupIds check again, for RUNNING count per group. skip if >0.
+// Due to FIFO behavior on group ids, and many rows can have same group ids since it's a hash on  (kafka key, topic).
+// FOR UPDATE really cant be applicable here unless creating separate tables for lock tracking and another table to keep track of jobs running for groups.
+func (r *outboxDB) reCheckEligibleGroupIdsTx(ctx context.Context, lockedGroupIDs []string, tx bun.Tx) ([]string, error) {
+	var alreadyRunningGroupIds []string
+	err := tx.NewSelect().
+		TableExpr("outbox").
+		Column("group_id").
+		Where("group_id IN (?)", bun.In(lockedGroupIDs)).
+		Where("status = (?)", RUNNING).
+		Distinct().
+		Scan(ctx, &alreadyRunningGroupIds)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool)
+	validGroupIds := make([]string, len(lockedGroupIDs))
+	copy(validGroupIds, lockedGroupIDs)
+
+	for _, runningGroup := range alreadyRunningGroupIds {
+		seen[runningGroup] = true
+	}
+
+	for i, lockedGroup := range lockedGroupIDs {
+		if _, ok := seen[lockedGroup]; ok {
+			validGroupIds = append(validGroupIds[:i], validGroupIds[i+1:]...)
+		}
+	}
+
+	return validGroupIds, nil
+}
+
 // withDistributedLocks finds unique keys that obtained a xact advisory lock.
 func (r *outboxDB) withDistributedLocksTx(ctx context.Context, keys []uint64, tx bun.Tx) ([]uint64, error) {
 	var xacts []AdvisoryXactLock
@@ -226,7 +245,7 @@ func (r *outboxDB) withDistributedLocksTx(ctx context.Context, keys []uint64, tx
 // Although possible to have a collison, very unlikely but possible.
 // The impact wouldn't get big, since it would just not process these messages for the key.
 // Worst case, messages for group id derived from the key will wait to be processed eventually.
-func getAdvisoryLockIdentifier(key string) (uint64, error) {
+func (r *outboxDB) getAdvisoryLockIdentifier(key string) (uint64, error) {
 	decodedHash, err := hex.DecodeString(key)
 	if err != nil {
 		return 0, err
@@ -234,14 +253,3 @@ func getAdvisoryLockIdentifier(key string) (uint64, error) {
 
 	return binary.BigEndian.Uint64(decodedHash[:8]), nil
 }
-
-// TODO: Re-check eligibility for acquired group IDs under the advisory lock to prevent processing stale groups that may already be running.
-// In the initial eligibility query (getEligibleGroupIdsTx), a worker could fetch groups with PENDING/PENDING_RETRY messages that dont have any running already.
-// However, another worker that has a lock, could commit its transaction, update messages with groupids to RUNNING, and release the lock.
-// But if another worker then acquires the now-free lock, it might of already fetched same eligible groupids right before the previous
-// worker holding a advisory lock on same groupids updated its messages to be running and committed the transaction for its groupids.
-// Due to concurrency timing issues, leading to new batch of messages but with the same groupids to also be updated to RUNNING when it shouldn't.
-// This violates the invariant of only one batch per group processing at a time, until the full batch completed/failed/requeued.
-// After lock acquisition, just re-query locked groupids check again, for RUNNING count per group. skip if >0.
-// Due to FIFO behavior on group ids, and many rows can have same group ids since its a hash on  (kafka key, topic).
-// FOR UPDATE really cant be applicable here unless creating separate tables for lock tracking and another table to keep track of jobs running for groups.
