@@ -25,7 +25,7 @@ func TestOutbox(t *testing.T) {
 	assert.NoError(t, err)
 	resource := postgres.SetUp(pool, t)
 
-	t.Run("allow to start outbox succesfully with listening consumers", func(t *testing.T) {
+	t.Run("allow to start outbox successfully with listening consumers", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -57,7 +57,7 @@ func TestOutbox(t *testing.T) {
 		)
 	})
 
-	t.Run("outbox initialzing should happen exactly once", func(t *testing.T) {
+	t.Run("outbox initializing should happen exactly once", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -72,7 +72,7 @@ func TestOutbox(t *testing.T) {
 		assert.NoError(t, err)
 
 		err = o.Init()
-		assert.EqualError(t, err, errors.New("initalizing outbox already occured, and outbox is activley running").Error())
+		assert.EqualError(t, err, errors.New("initializing outbox already occurred, and outbox is actively running").Error())
 	})
 }
 

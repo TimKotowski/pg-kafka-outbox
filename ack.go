@@ -1,17 +1,23 @@
 package outbox
 
-import (
-	"github.com/TimKotowski/pg-kafka-outbox/internal/repository"
-)
+import "github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 
 type Acknowledgement struct {
-	Status string
+	Status AckStatus
 }
 
+type AckStatus = string
+
 var (
-	Unknown = Acknowledgement{""}
-	Success = Acknowledgement{"success"}
-	Failure = Acknowledgement{"failure"}
+	success AckStatus = "success"
+	retry   AckStatus = "retry"
+	failed  AckStatus = "failed"
+)
+
+var (
+	Success = Acknowledgement{success}
+	Retry   = Acknowledgement{retry}
+	Failure = Acknowledgement{failed}
 )
 
 func (a Acknowledgement) String() string {
@@ -19,19 +25,19 @@ func (a Acknowledgement) String() string {
 }
 
 type Acknowledger interface {
-	Acknowledge(message Message, ackAcknowledgement Acknowledgement) error
+	Acknowledge(message Message, ackAcknowledgement Acknowledgement)
 }
 
 type ackAcknowledgement struct {
-	repository repository.Repository
+	repository outboxdb.OutboxDB
 }
 
-func newAcknowledgement(repository repository.Repository) Acknowledger {
+func newAcknowledgement(repository outboxdb.OutboxDB) Acknowledger {
 	return &ackAcknowledgement{
 		repository: repository,
 	}
 }
 
-func (a *ackAcknowledgement) Acknowledge(message Message, acackAcknowledgement Acknowledgement) error {
-	return nil
+func (a *ackAcknowledgement) Acknowledge(message Message, ackAcknowledgement Acknowledgement) {
+
 }
