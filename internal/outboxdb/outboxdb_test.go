@@ -74,6 +74,7 @@ func TestAdvisoryXactLock(t *testing.T) {
 		sort.Slice(updatedMessages, func(i, j int) bool {
 			return updatedMessages[i].CreatedAt.Before(updatedMessages[j].CreatedAt)
 		})
+
 		fmt.Println(updatedMessages)
 	})
 }
