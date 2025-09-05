@@ -4,18 +4,17 @@ import (
 	"context"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"github.com/uptrace/bun"
 )
 
 type Status = string
 
 const (
-	PENDING       Status = "PENDING"
-	SUCCESSFUL    Status = "SUCCESSFUL"
-	FAILED        Status = "FAILED"
-	RUNNING       Status = "RUNNING"
-	PENDING_RETRY Status = "PENDING_RETRY"
+	PENDING      Status = "PENDING"
+	PendingRetry Status = "PENDING_RETRY"
+	COMPLETED    Status = "COMPLETED"
+	FAILED       Status = "FAILED"
+	RUNNING      Status = "RUNNING"
 )
 
 type Message struct {
@@ -42,9 +41,6 @@ func (m *Message) BeforeAppendModel(ctx context.Context, query bun.Query) error 
 	switch query.(type) {
 	case *bun.InsertQuery:
 		now := time.Now().UTC()
-		if m.JobID == "" {
-			m.JobID = ulid.Make().String()
-		}
 		if m.CreatedAt.IsZero() {
 			m.CreatedAt = now
 		}
@@ -56,6 +52,6 @@ func (m *Message) BeforeAppendModel(ctx context.Context, query bun.Query) error 
 }
 
 type AdvisoryXactLock struct {
-	GroupID uint64 `bun:"group_id"`
-	Locked  bool   `bun:"locked"`
+	GroupID int64 `bun:"group_id"`
+	Locked  bool  `bun:"locked"`
 }
