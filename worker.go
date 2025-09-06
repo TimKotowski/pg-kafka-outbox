@@ -5,13 +5,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/TimKotowski/pg-kafka-outbox/internal/repository"
+	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 )
 
 var availableWorkers = 2
 
 const (
-	unintialized = iota
+	uninitialized = iota
 	running
 )
 
@@ -20,16 +20,16 @@ type worker struct {
 	state                atomic.Uint32
 	ctx                  context.Context
 	config               *Config
-	repository           repository.OutboxDB
+	outboxDB             outboxdb.OutboxDB
 	acknowledgedMessages chan Message
 }
 
-func newWorker(ctx context.Context, config *Config, repo repository.OutboxDB) *worker {
+func newWorker(ctx context.Context, config *Config, outboxDB outboxdb.OutboxDB) *worker {
 	return &worker{
 		availableWorkers: availableWorkers,
 		ctx:              ctx,
 		config:           config,
-		repository:       repo,
+		outboxDB:         outboxDB,
 		state:            atomic.Uint32{},
 	}
 }
