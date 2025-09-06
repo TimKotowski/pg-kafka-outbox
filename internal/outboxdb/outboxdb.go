@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"log"
 	"time"
 
@@ -66,7 +65,7 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 			}
 
 			if len(eligibleGroupIds) == 0 {
-				return nil, errors.New("no more eligible groups founds to process")
+				return nil, nil
 			}
 
 			lockIdToGroupIdMap := make(map[int64]string)
