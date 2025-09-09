@@ -30,13 +30,12 @@ func TestFifoMessageProcessing(t *testing.T) {
 	resource := postgres.SetUp(pool, t)
 
 	t.Run("will allow transactional ordering processing, for kafka key, with at most only 10 messages running", func(t *testing.T) {
-		var messages []outboxdb.Message
-
 		topic := "public.topic.v1"
 		key := []byte("user-42")
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte(topic), key)
 
+		var messages []outboxdb.Message
 		for i := range 20 {
 			message := outboxdb.Message{
 				JobID:       ulid.Make().String(),
@@ -66,8 +65,9 @@ func TestFifoMessageProcessing(t *testing.T) {
 
 		for range 5 {
 			go func(signal chan struct{}) {
-				defer wg.Done()
 				<-signal
+				defer wg.Done()
+
 				_, err = r.GetPendingMessagesFIFO(ctx)
 				assert.NoError(t, err)
 			}(signal)
@@ -101,6 +101,84 @@ func TestFifoMessageProcessing(t *testing.T) {
 		for _, pendingMessage := range pendingMessages {
 			assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
 			assert.Nil(t, pendingMessage.StartedAt)
+		}
+	})
+
+	t.Run("will not allow processing more messages for a group, if there are already processing messages for group", func(t *testing.T) {
+		topic := "public.topic.v1"
+		key := []byte("user-42")
+		f := hash.NewHash(sha256.New())
+		f.Write([]byte(topic), key)
+
+		var messages []outboxdb.Message
+		for i := range 20 {
+			if i < 10 {
+				now := time.Now()
+				ptr := &now
+				message := outboxdb.Message{
+					JobID:       ulid.Make().String(),
+					Topic:       topic,
+					Key:         key,
+					Payload:     []byte(`{"name":"Alice","email":"alice@example.com"}`),
+					Headers:     []byte(`{"header1":"value1"}`),
+					Status:      outboxdb.RUNNING,
+					Retries:     1,
+					MaxRetries:  5,
+					GroupID:     f.Key(),
+					Fingerprint: "fp-abc123",
+					CreatedAt:   time.Now().Add(time.Second * time.Duration(i)),
+					StartedAt:   ptr,
+				}
+
+				messages = append(messages, message)
+			} else {
+				message := outboxdb.Message{
+					JobID:       ulid.Make().String(),
+					Topic:       topic,
+					Key:         key,
+					Payload:     []byte(`{"name":"Alice","email":"alice@example.com"}`),
+					Headers:     []byte(`{"header1":"value1"}`),
+					Status:      outboxdb.PENDING,
+					Retries:     1,
+					MaxRetries:  5,
+					GroupID:     f.Key(),
+					Fingerprint: "fp-abc123",
+					CreatedAt:   time.Now().Add(time.Second * time.Duration(i)),
+				}
+				messages = append(messages, message)
+			}
+		}
+
+		ctx := context.Background()
+		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
+		assert.NoError(t, err)
+
+		r := outboxdb.NewOutboxDB(resource.DB)
+
+		results, err := r.GetPendingMessagesFIFO(ctx)
+		assert.Nil(t, results)
+
+		var updatedMessages []outboxdb.Message
+		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
+		assert.NoError(t, err)
+		// Correct precessing ordering. Should be monotonically increasing order by created.
+		sort.Slice(updatedMessages, func(i, j int) bool {
+			return updatedMessages[i].CreatedAt.Before(updatedMessages[j].CreatedAt)
+		})
+
+		runningMessages := updatedMessages[:10]
+		pendingMessages := updatedMessages[10:]
+		assert.Len(t, runningMessages, 10)
+		assert.Len(t, pendingMessages, 10)
+
+		for _, message := range runningMessages {
+			assert.Equal(t, message.Status, outboxdb.RUNNING)
+			assert.NotNil(t, message.StartedAt)
+		}
+
+		for _, message := range pendingMessages {
+			assert.Equal(t, message.Status, outboxdb.PENDING)
+			assert.Nil(t, message.StartedAt)
 		}
 	})
 
@@ -148,12 +226,13 @@ func TestFifoMessageProcessing(t *testing.T) {
 		signal := make(chan struct{}, 1)
 		r := outboxdb.NewOutboxDB(resource.DB)
 		wg := sync.WaitGroup{}
-		wg.Add(5)
+		wg.Add(8)
 
-		for range 5 {
+		for range 8 {
 			go func(signal chan struct{}) {
-				defer wg.Done()
 				<-signal
+
+				defer wg.Done()
 				_, err = r.GetPendingMessagesFIFO(ctx)
 				assert.NoError(t, err)
 			}(signal)

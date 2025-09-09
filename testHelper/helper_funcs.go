@@ -10,9 +10,9 @@ func GroupBy[T comparable, V any](elements []V, keySelector func(V) T) map[T][]V
 	return destination
 }
 
-// Partition returns a tuple of lists
-//  first slice is grouped where predicated yielded true
-//  seconds slice is grouped where predicated yielded true
+// Partition returns a tuple of lists based on predicate.
+// first slice is grouped where predicated yielded true.
+// seconds slice is grouped where predicated yielded true.
 func Partition[V any](elements []V, predicate func(V) bool) ([]V, []V) {
 	var first []V
 	var second []V

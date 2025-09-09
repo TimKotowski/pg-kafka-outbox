@@ -126,7 +126,6 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 			if err != nil {
 				return nil, err
 			}
-			log.Println("updated", messages)
 
 			return messages, nil
 		}
@@ -179,18 +178,18 @@ func (r *outboxDB) getEligibleGroupIdsTx(ctx context.Context, tx bun.IDB) ([]str
 	var groupID []string
 
 	subQuery := tx.NewSelect().
-		Table("outbox").
+		TableExpr("outbox as o2").
 		ColumnExpr("1").
-		Where("group_id = outbox.group_id").
-		Where("status = (?)", RUNNING)
+		Where("o2.group_id = o1.group_id").
+		Where("o2.status = (?)", RUNNING)
 
 	err := tx.NewSelect().
-		Table("outbox").
-		Column("group_id").
-		Where("status IN (?)", bun.In([]string{PENDING, PendingRetry})).
+		TableExpr("outbox as o1").
+		Column("o1.group_id").
+		Where("o1.status IN (?)", bun.In([]string{PENDING, PendingRetry})).
 		Where("NOT EXISTS (?)", subQuery).
-		Group("group_id").
-		OrderExpr("MIN(created_at) ASC").
+		Group("o1.group_id").
+		OrderExpr("MIN(o1.created_at) ASC").
 		Limit(10).
 		Scan(ctx, &groupID)
 	if err != nil {
