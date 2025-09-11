@@ -9,6 +9,7 @@ import (
 	"github.com/uptrace/bun/migrate"
 )
 
+// Migrations TODO: Work on revamping migration to remove global variable.
 var Migrations = migrate.NewMigrations()
 
 //go:embed schema/*.sql
