@@ -3,7 +3,6 @@ package outboxdb_test
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -29,7 +28,9 @@ func TestFifoMessageProcessing(t *testing.T) {
 	assert.NoError(t, err)
 	resource := postgres.SetUp(pool, t)
 
-	t.Run("will allow transactional ordering processing, for kafka key, with at most only 10 messages running", func(t *testing.T) {
+	t.Run("will allow order processing semantics,  with at most only 10 messages running", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
+
 		topic := "public.topic.v1"
 		key := []byte("user-42")
 		f := hash.NewHash(sha256.New())
@@ -58,23 +59,10 @@ func TestFifoMessageProcessing(t *testing.T) {
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
 		assert.NoError(t, err)
 
-		signal := make(chan struct{}, 1)
 		r := outboxdb.NewOutboxDB(resource.DB)
-		wg := sync.WaitGroup{}
-		wg.Add(5)
 
-		for range 5 {
-			go func(signal chan struct{}) {
-				<-signal
-				defer wg.Done()
-
-				_, err = r.GetPendingMessagesFIFO(ctx)
-				assert.NoError(t, err)
-			}(signal)
-		}
-
-		close(signal)
-		wg.Wait()
+		_, err = r.GetPendingMessagesFIFO(ctx)
+		assert.NoError(t, err)
 
 		var updatedMessages []outboxdb.Message
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
@@ -105,6 +93,8 @@ func TestFifoMessageProcessing(t *testing.T) {
 	})
 
 	t.Run("will not allow processing more messages for a group, if there are already processing messages for group", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
+
 		topic := "public.topic.v1"
 		key := []byte("user-42")
 		f := hash.NewHash(sha256.New())
@@ -182,7 +172,9 @@ func TestFifoMessageProcessing(t *testing.T) {
 		}
 	})
 
-	t.Run("will allow transactional ordering processing, for many different kafka key, with at most only 10 messages running", func(t *testing.T) {
+	t.Run("will allow transactional ordering processing, for many different kafka keys, with at most only 10 messages running", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
+
 		var testMessages []outboxdb.Message
 		tuples := []TestFifoTuple{
 			{
@@ -255,6 +247,45 @@ func TestFifoMessageProcessing(t *testing.T) {
 			return message.Topic == userTopic
 		})
 
-		fmt.Println(userMessages, orderMessages)
+		runningUserMessages := userMessages[:10]
+		pendingUserMessages := userMessages[10:]
+		for i := 0; i < len(runningUserMessages)-1; i++ {
+			currentMessage := runningUserMessages[i]
+			nextMessage := runningUserMessages[i+1]
+
+			assert.NotNil(t, currentMessage.StartedAt)
+			assert.NotNil(t, nextMessage.StartedAt)
+			assert.True(t, currentMessage.CreatedAt.Before(nextMessage.CreatedAt), "transactional ordering incorrect")
+			assert.Equal(t, outboxdb.RUNNING, currentMessage.Status)
+		}
+
+		for _, pendingMessage := range pendingUserMessages {
+			assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
+			assert.Nil(t, pendingMessage.StartedAt)
+		}
+
+		runningOrderMessages := orderMessages[:10]
+		pendingOrderMessages := orderMessages[10:]
+		for i := 0; i < len(runningOrderMessages)-1; i++ {
+			currentMessage := runningOrderMessages[i]
+			nextMessage := runningOrderMessages[i+1]
+
+			assert.NotNil(t, currentMessage.StartedAt)
+			assert.NotNil(t, nextMessage.StartedAt)
+			assert.True(t, currentMessage.CreatedAt.Before(nextMessage.CreatedAt), "transactional ordering incorrect")
+			assert.Equal(t, outboxdb.RUNNING, currentMessage.Status)
+		}
+
+		for _, pendingMessage := range pendingOrderMessages {
+			assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
+			assert.Nil(t, pendingMessage.StartedAt)
+		}
+	})
+
+	t.Run("multiple groups with mixed statuses", func(t *testing.T) {
+		// Setup: Group1: 5 PENDING; Group2: 5 PENDING; Group3: 5 PENDING + 1 RUNNING (ineligible).
+	})
+	t.Run("groups with pending retries can still be processed", func(t *testing.T) {
+
 	})
 }

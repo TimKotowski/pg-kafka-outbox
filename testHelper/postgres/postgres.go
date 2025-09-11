@@ -15,6 +15,7 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/extra/bundebug"
 
+	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
 )
 
@@ -82,6 +83,11 @@ func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
 		ContainerName: resource.Container.Name,
 		ConstainerID:  resource.Container.ID,
 	}
+}
+
+func (r *Resource) CleanUpJobs(ctx context.Context, t *testing.T) {
+	_, err := r.DB.NewTruncateTable().Model((*outboxdb.Message)(nil)).Cascade().Exec(ctx)
+	assert.NoError(t, err)
 }
 
 func pgIsReady(pool *dockertest.Pool, dsn string) (*bun.DB, error) {

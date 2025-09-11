@@ -37,6 +37,8 @@ type OutboxDB interface {
 	// UpdateMessageStatus updates given message with correct status.
 	UpdateMessageStatus(ctx context.Context, jobID string, status Status) error
 
+	UpdateMessagesStatusInTx(ctx context.Context, jobID []string, tx bun.IDB, status Status) ([]Message, error)
+
 	// RequeueOrphanedMessages will update status of message to be able to be reprocessed.
 	// in case of hanging/stalled messages.
 	RequeueOrphanedMessages(ctx context.Context) (int, error)
@@ -109,20 +111,11 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 			}
 
 			if len(jobIds) == 0 {
+				log.Printf("obtained locks for %v but no messages to update to RUNNING, concurrency timing issue", jobIds)
 				return nil, nil
 			}
 
-			var messages []Message
-			err = tx.NewUpdate().
-				Table("outbox").
-				Set("retries = outbox.retries + (?)", 1).
-				Set("started_at = (?)", time.Now().UTC()).
-				Set("updated_at = (?)", time.Now().UTC()).
-				Set("status = (?)", RUNNING).
-				Where("job_id IN (?)", bun.In(jobIds)).
-				Returning("*").
-				Scan(ctx, &messages)
-
+			messages, err := r.UpdateMessagesStatusInTx(ctx, jobIds, tx, RUNNING)
 			if err != nil {
 				return nil, err
 			}
@@ -151,6 +144,24 @@ func (r *outboxDB) UpdateMessageStatus(ctx context.Context, jobID string, status
 
 func (r *outboxDB) ExistsByFingerprint(ctx context.Context, fingerprint []byte) (bool, error) {
 	return false, nil
+}
+
+func (r *outboxDB) UpdateMessagesStatusInTx(ctx context.Context, jobIds []string, tx bun.IDB, status Status) ([]Message, error) {
+	var messages []Message
+	err := tx.NewUpdate().
+		Table("outbox").
+		Set("retries = outbox.retries + (?)", 1).
+		Set("started_at = (?)", time.Now().UTC()).
+		Set("updated_at = (?)", time.Now().UTC()).
+		Set("status = (?)", status).
+		Where("job_id IN (?)", bun.In(jobIds)).
+		Returning("*").
+		Scan(ctx, &messages)
+	if err != nil {
+		return nil, err
+	}
+
+	return messages, nil
 }
 
 func (r *outboxDB) getPendingMessagesFIFOTx(ctx context.Context, acquiredGroupIDLocks []string, tx bun.IDB) ([]string, error) {

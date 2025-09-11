@@ -38,7 +38,7 @@ func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
 
 func (o *Outbox) Init() error {
 	if !o.worker.state.CompareAndSwap(uninitialized, running) {
-		return errors.New("initalizing outbox already occured, and outbox is activley running")
+		return errors.New("initializing outbox already occurred, and outbox is actively running")
 	}
 
 	if err := migrations.Migrate(o.ctx, o.db); err != nil {
