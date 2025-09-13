@@ -36,7 +36,7 @@ func NewConsumer(outbox *Outbox) ConsumerHandler {
 
 // StartConsumer starts up an independent consumer.
 // Consumers are thread safe, allowing many Consumers to be instantiated.
-// Each with there own seperate processing of outbox messages.
+// Each with their own separate processing of outbox messages.
 func (c *consumer) StartConsumer(consumer Consumer) error {
 	receiver := newConsumerClaim(c.conf)
 	ack := newAcknowledgement(c.repository)

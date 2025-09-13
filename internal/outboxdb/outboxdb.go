@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"log"
 	"time"
 
@@ -38,6 +37,8 @@ type OutboxDB interface {
 	// UpdateMessageStatus updates given message with correct status.
 	UpdateMessageStatus(ctx context.Context, jobID string, status Status) error
 
+	UpdateMessagesStatusInTx(ctx context.Context, jobID []string, tx bun.IDB, status Status) ([]Message, error)
+
 	// RequeueOrphanedMessages will update status of message to be able to be reprocessed.
 	// in case of hanging/stalled messages.
 	RequeueOrphanedMessages(ctx context.Context) (int, error)
@@ -66,7 +67,7 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 			}
 
 			if len(eligibleGroupIds) == 0 {
-				return nil, errors.New("no more eligible groups founds to process")
+				return nil, nil
 			}
 
 			lockIdToGroupIdMap := make(map[int64]string)
@@ -110,24 +111,14 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 			}
 
 			if len(jobIds) == 0 {
+				log.Printf("obtained locks for %v but no messages to update to RUNNING, concurrency timing issue", jobIds)
 				return nil, nil
 			}
 
-			var messages []Message
-			err = tx.NewUpdate().
-				Table("outbox").
-				Set("retries = outbox.retries + (?)", 1).
-				Set("started_at = (?)", time.Now().UTC()).
-				Set("updated_at = (?)", time.Now().UTC()).
-				Set("status = (?)", RUNNING).
-				Where("job_id IN (?)", bun.In(jobIds)).
-				Returning("*").
-				Scan(ctx, &messages)
-
+			messages, err := r.UpdateMessagesStatusInTx(ctx, jobIds, tx, RUNNING)
 			if err != nil {
 				return nil, err
 			}
-			log.Println("updated", messages)
 
 			return messages, nil
 		}
@@ -155,6 +146,24 @@ func (r *outboxDB) ExistsByFingerprint(ctx context.Context, fingerprint []byte) 
 	return false, nil
 }
 
+func (r *outboxDB) UpdateMessagesStatusInTx(ctx context.Context, jobIds []string, tx bun.IDB, status Status) ([]Message, error) {
+	var messages []Message
+	err := tx.NewUpdate().
+		Table("outbox").
+		Set("retries = outbox.retries + (?)", 1).
+		Set("started_at = (?)", time.Now().UTC()).
+		Set("updated_at = (?)", time.Now().UTC()).
+		Set("status = (?)", status).
+		Where("job_id IN (?)", bun.In(jobIds)).
+		Returning("*").
+		Scan(ctx, &messages)
+	if err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
 func (r *outboxDB) getPendingMessagesFIFOTx(ctx context.Context, acquiredGroupIDLocks []string, tx bun.IDB) ([]string, error) {
 	var jobIds []string
 	subQuery := tx.NewSelect().
@@ -180,18 +189,18 @@ func (r *outboxDB) getEligibleGroupIdsTx(ctx context.Context, tx bun.IDB) ([]str
 	var groupID []string
 
 	subQuery := tx.NewSelect().
-		Table("outbox").
+		TableExpr("outbox as o2").
 		ColumnExpr("1").
-		Where("group_id = outbox.group_id").
-		Where("status = (?)", RUNNING)
+		Where("o2.group_id = o1.group_id").
+		Where("o2.status = (?)", RUNNING)
 
 	err := tx.NewSelect().
-		Table("outbox").
-		Column("group_id").
-		Where("status IN (?)", bun.In([]string{PENDING, PendingRetry})).
+		TableExpr("outbox as o1").
+		Column("o1.group_id").
+		Where("o1.status IN (?)", bun.In([]string{PENDING, PendingRetry})).
 		Where("NOT EXISTS (?)", subQuery).
-		Group("group_id").
-		OrderExpr("MIN(created_at) ASC").
+		Group("o1.group_id").
+		OrderExpr("MIN(o1.created_at) ASC").
 		Limit(10).
 		Scan(ctx, &groupID)
 	if err != nil {

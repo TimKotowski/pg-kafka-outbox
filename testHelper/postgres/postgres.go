@@ -2,12 +2,10 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/TimKotowski/pg-kafka-outbox/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/ory/dockertest"
@@ -15,6 +13,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
+	"github.com/uptrace/bun/extra/bundebug"
+
+	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
+	"github.com/TimKotowski/pg-kafka-outbox/migrations"
 )
 
 const (
@@ -32,7 +34,7 @@ type Resource struct {
 
 	ContainerName string
 
-	ConstainerID string
+	ContainerId string
 }
 
 func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
@@ -69,20 +71,23 @@ func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
 	pool.MaxWait = 20 * time.Second
 	db, err := pgIsReady(pool, databaseURL)
 	assert.NoError(t, err)
-
-	if db == nil {
-		assert.NoError(t, errors.New("something went horribly wrong, db connection unsuccessful"))
-	}
+	assert.NotNil(t, db, "something went horribly wrong, db connection unsuccessful")
 
 	err = migrations.Migrate(ctx, db)
 	assert.NoError(t, err)
+	db.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
 
 	return Resource{
 		Dsn:           databaseURL,
 		DB:            db,
 		ContainerName: resource.Container.Name,
-		ConstainerID:  resource.Container.ID,
+		ContainerId:   resource.Container.ID,
 	}
+}
+
+func (r *Resource) CleanUpJobs(ctx context.Context, t *testing.T) {
+	_, err := r.DB.NewTruncateTable().Model((*outboxdb.Message)(nil)).Cascade().Exec(ctx)
+	assert.NoError(t, err)
 }
 
 func pgIsReady(pool *dockertest.Pool, dsn string) (*bun.DB, error) {

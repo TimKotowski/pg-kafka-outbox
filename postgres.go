@@ -11,7 +11,7 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
-func initalizeDB(config *Config) (*bun.DB, error) {
+func initializeDB(config *Config) (*bun.DB, error) {
 	db, err := GetDBConnection(config)
 	if err != nil {
 		return nil, err

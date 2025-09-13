@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
+	"github.com/TimKotowski/pg-kafka-outbox/migrations"
+
 	"github.com/uptrace/bun"
 )
 
@@ -17,12 +19,12 @@ type Outbox struct {
 }
 
 func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
-	db, err := initalizeDB(conf)
+	db, err := initializeDB(conf)
 	if err != nil {
 		return nil, err
 	}
 
-	repository := outboxdb.NewRepository(db)
+	repository := outboxdb.NewOutboxDB(db)
 	worker := newWorker(ctx, conf, repository)
 
 	return &Outbox{
@@ -35,11 +37,11 @@ func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
 }
 
 func (o *Outbox) Init() error {
-	if !o.worker.state.CompareAndSwap(unintialized, running) {
-		return errors.New("initalizing outbox already occured, and outbox is activley running")
+	if !o.worker.state.CompareAndSwap(uninitialized, running) {
+		return errors.New("initializing outbox already occurred, and outbox is actively running")
 	}
 
-	if err := migrations.migrate(o.ctx, o.db); err != nil {
+	if err := migrations.Migrate(o.ctx, o.db); err != nil {
 		return err
 	}
 

@@ -16,7 +16,7 @@ func RunInTx(ctx context.Context, db *bun.DB, fn func(tx bun.Tx) error) error {
 		return nil
 	})
 	if err != nil {
-		log.Println("database transcation rolled back due to", err.Error())
+		log.Println("database transaction rolled back due to", err.Error())
 	}
 
 	return err

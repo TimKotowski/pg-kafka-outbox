@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/TimKotowski/pg-kafka-outbox/hash"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/TimKotowski/pg-kafka-outbox/hash"
 )
 
 func TestGenerateGroupIdHashFromKey(t *testing.T) {
