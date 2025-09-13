@@ -74,7 +74,6 @@ func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
 
 	err = migrations.Migrate(ctx, db)
 	assert.NoError(t, err)
-	//db.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
 
 	return Resource{
 		Dsn:           databaseURL,

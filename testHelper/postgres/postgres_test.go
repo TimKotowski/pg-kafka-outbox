@@ -10,6 +10,8 @@ import (
 )
 
 func TestPostgresContainerSetup(t *testing.T) {
+	t.Parallel()
+
 	pool, err := dockertest.NewPool("")
 	assert.NoError(t, err)
 
