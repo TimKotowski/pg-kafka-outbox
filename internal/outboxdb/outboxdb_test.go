@@ -20,6 +20,8 @@ import (
 )
 
 func TestFifoMessageProcessing(t *testing.T) {
+	t.Parallel()
+
 	pool, err := dockertest.NewPool("")
 	assert.NoError(t, err)
 	resource := postgres.SetUp(pool, t)
@@ -295,6 +297,8 @@ func TestFifoMessageProcessing(t *testing.T) {
 }
 
 func TestStandardMessageProcessing(t *testing.T) {
+	t.Parallel()
+
 	pool, err := dockertest.NewPool("")
 	assert.NoError(t, err)
 	resource := postgres.SetUp(pool, t)
