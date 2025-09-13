@@ -3,7 +3,6 @@ package outboxdb_test
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -58,7 +57,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 
 		// Ensure messages with the same timestamp maintain correct order.
 		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
-		assert.LessOrEqual(t, runningMessages[len(runningMessages)-1].CreatedAt, pendingMessages[len(pendingMessages)-1].CreatedAt)
+		assert.LessOrEqual(t, runningMessages[len(runningMessages)-1].CreatedAt, pendingMessages[0].CreatedAt)
 
 		assertRunningInRepository(t, runningMessages[:10])
 		assertPendingInRepository(t, pendingMessages[10:])
@@ -98,7 +97,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 
 		// Ensure messages with the same timestamp maintain correct order.
 		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
-		assert.LessOrEqual(t, runningMessages[len(runningMessages)-1].CreatedAt, pendingMessages[len(pendingMessages)-1].CreatedAt)
+		assert.LessOrEqual(t, runningMessages[len(runningMessages)-1].CreatedAt, pendingMessages[0].CreatedAt)
 
 		assertRunningInRepository(t, runningMessages[:10])
 		assertPendingInRepository(t, pendingMessages[10:])
@@ -129,22 +128,28 @@ func TestFifoMessageProcessing(t *testing.T) {
 		ctx := context.Background()
 
 		signal := make(chan struct{}, 1)
-		r := outboxdb.NewOutboxDB(resource.DB, 0)
+		errChan := make(chan error, 8)
 		wg := sync.WaitGroup{}
 		wg.Add(8)
 
 		for range 8 {
 			go func(signal chan struct{}) {
 				<-signal
-
 				defer wg.Done()
-				_, err = r.GetPendingMessagesFIFO(ctx)
-				assert.NoError(t, err)
+
+				r := outboxdb.NewOutboxDB(resource.DB, 0)
+				_, err := r.GetPendingMessagesFIFO(ctx)
+				errChan <- err
 			}(signal)
 		}
 
 		close(signal)
 		wg.Wait()
+		close(errChan)
+
+		for err := range errChan {
+			assert.NoError(t, err)
+		}
 
 		var updatedMessages []outboxdb.Message
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
@@ -170,7 +175,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		pendingGroup1Messages := userGroup1[10:]
 		// Ensure messages with the same timestamp maintain correct order.
 		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
-		assert.LessOrEqual(t, runningGroup1Messages[len(runningGroup1Messages)-1].CreatedAt, pendingGroup1Messages[len(pendingGroup1Messages)-1].CreatedAt)
+		assert.LessOrEqual(t, runningGroup1Messages[len(runningGroup1Messages)-1].CreatedAt, pendingGroup1Messages[0].CreatedAt)
 
 		assertRunningInRepository(t, runningGroup1Messages)
 		assertPendingInRepository(t, pendingGroup1Messages)
@@ -185,7 +190,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		pendingGroup2Messages := userGroup2[10:]
 		// Ensure messages with the same timestamp maintain correct order.
 		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
-		assert.LessOrEqual(t, runningGroup2Messages[len(runningGroup2Messages)-1].CreatedAt, pendingGroup2Messages[len(pendingGroup2Messages)-1].CreatedAt)
+		assert.LessOrEqual(t, runningGroup2Messages[len(runningGroup2Messages)-1].CreatedAt, pendingGroup2Messages[0].CreatedAt)
 		assertRunningInRepository(t, userGroup2[:10])
 		assertPendingInRepository(t, userGroup2[10:])
 
@@ -194,7 +199,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		pendingGroup3Messages := orderMessages[10:]
 		// Ensure messages with the same timestamp maintain correct order.
 		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
-		assert.LessOrEqual(t, runningGroup3Messages[len(runningGroup3Messages)-1].CreatedAt, pendingGroup3Messages[len(pendingGroup3Messages)-1].CreatedAt)
+		assert.LessOrEqual(t, runningGroup3Messages[len(runningGroup3Messages)-1].CreatedAt, pendingGroup3Messages[0].CreatedAt)
 		assertRunningInRepository(t, orderMessages[:10])
 		assertPendingInRepository(t, orderMessages[10:])
 	})
@@ -211,8 +216,8 @@ func TestFifoMessageProcessing(t *testing.T) {
 		group2Pending := generateOutBoxMessages(userKafkaKey2, nil, userTopic, 5, outboxdb.PENDING)
 
 		userKafkaKey3 := []byte("key_0000003")
-		group3Pending := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 5, outboxdb.PENDING)
 		group3Running := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 1, outboxdb.RUNNING)
+		group3Pending := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 5, outboxdb.PENDING)
 
 		messages = append(messages, group1Pending...)
 		messages = append(messages, group2Pending...)
@@ -263,7 +268,6 @@ func TestFifoMessageProcessing(t *testing.T) {
 		pendingMessages := group3[1:]
 		assert.NotNil(t, runningMessage.StartedAt)
 		assert.Equal(t, outboxdb.RUNNING, runningMessage.Status)
-		assert.LessOrEqual(t, runningMessage.CreatedAt, pendingMessages[len(pendingMessages)-1].CreatedAt)
 		assertPendingInRepository(t, pendingMessages)
 	})
 
@@ -318,28 +322,32 @@ func TestStandardMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		signal := make(chan struct{}, 1)
-		r := outboxdb.NewOutboxDB(resource.DB, 1)
+		errChan := make(chan error, 4)
 		wg := sync.WaitGroup{}
 		wg.Add(4)
 
 		for range 4 {
 			go func(signal chan struct{}) {
 				<-signal
-
 				defer wg.Done()
-				_, err = r.GetPendingMessages(ctx)
-				assert.NoError(t, err)
+
+				r := outboxdb.NewOutboxDB(resource.DB, 1)
+				_, err := r.GetPendingMessages(ctx)
+				errChan <- err
 			}(signal)
 		}
 
 		close(signal)
 		wg.Wait()
+		close(errChan)
+
+		for err := range errChan {
+			assert.NoError(t, err)
+		}
 
 		var updatedMessages []outboxdb.Message
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
 		assert.NoError(t, err)
-
-		fmt.Println(updatedMessages)
 	})
 }
 

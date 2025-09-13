@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
-	"github.com/uptrace/bun/extra/bundebug"
 
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
@@ -75,7 +74,7 @@ func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
 
 	err = migrations.Migrate(ctx, db)
 	assert.NoError(t, err)
-	db.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
+	//db.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
 
 	return Resource{
 		Dsn:           databaseURL,
