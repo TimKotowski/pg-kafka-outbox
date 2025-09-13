@@ -45,17 +45,42 @@ type OutboxDB interface {
 }
 
 type outboxDB struct {
-	db *bun.DB
+	db    *bun.DB
+	limit int
 }
 
-func NewOutboxDB(db *bun.DB) OutboxDB {
+func NewOutboxDB(db *bun.DB, limit int) OutboxDB {
 	return &outboxDB{
-		db: db,
+		db:    db,
+		limit: limit,
 	}
 }
 
 func (r *outboxDB) GetPendingMessages(ctx context.Context) ([]Message, error) {
-	return nil, nil
+	var messages []Message
+	sub := r.db.NewSelect().
+		Table("outbox").
+		Column("job_id").
+		Where("status IN (?)", bun.In([]string{PENDING, PendingRetry})).
+		Limit(r.limit).
+		For("UPDATE SKIP LOCKED")
+
+	err := r.db.NewUpdate().
+		TableExpr("outbox as o").
+		TableExpr("(?) as sub", sub).
+		Set("retries = o.retries + (?)", 1).
+		Set("started_at = (?)", time.Now().UTC()).
+		Set("updated_at = (?)", time.Now().UTC()).
+		Set("status = (?)", RUNNING).
+		Where("sub.job_id = o.job_id").
+		Returning("o.*").
+		Scan(ctx, &messages)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return messages, nil
 }
 
 func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error) {

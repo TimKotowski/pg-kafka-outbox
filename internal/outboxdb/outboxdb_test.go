@@ -3,6 +3,7 @@ package outboxdb_test
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -39,7 +40,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
 		_, err = r.GetPendingMessagesFIFO(ctx)
 		assert.NoError(t, err)
@@ -79,7 +80,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		_, err = resource.DB.NewInsert().Model(&messagesPending).Exec(t.Context())
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
 		results, err := r.GetPendingMessagesFIFO(t.Context())
 		assert.Nil(t, results)
@@ -128,7 +129,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		ctx := context.Background()
 
 		signal := make(chan struct{}, 1)
-		r := outboxdb.NewOutboxDB(resource.DB)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 		wg := sync.WaitGroup{}
 		wg.Add(8)
 
@@ -222,7 +223,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
 		_, err = r.GetPendingMessagesFIFO(ctx)
 		assert.NoError(t, err)
@@ -280,7 +281,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
 		_, err = r.GetPendingMessagesFIFO(ctx)
 		assert.NoError(t, err)
@@ -292,6 +293,53 @@ func TestFifoMessageProcessing(t *testing.T) {
 		// Correct precessing ordering. Should be monotonically increasing order by created based on status
 		sortMessagesByStatusAndCreatedAt(updatedMessages)
 		assertRunningInRepository(t, updatedMessages)
+	})
+}
+
+func TestStandardMessageProcessing(t *testing.T) {
+	t.Parallel()
+
+	pool, err := dockertest.NewPool("")
+	assert.NoError(t, err)
+	resource := postgres.SetUp(pool, t)
+
+	t.Run("will process messages in high availability environments or concurrent worker processes", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
+
+		topic := "public.topic.v1"
+		key := []byte("user-42")
+		f := hash.NewHash(sha256.New())
+		f.Write([]byte(topic), key)
+
+		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.PENDING)
+
+		ctx := context.Background()
+		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
+		assert.NoError(t, err)
+
+		signal := make(chan struct{}, 1)
+		r := outboxdb.NewOutboxDB(resource.DB, 1)
+		wg := sync.WaitGroup{}
+		wg.Add(4)
+
+		for range 4 {
+			go func(signal chan struct{}) {
+				<-signal
+
+				defer wg.Done()
+				_, err = r.GetPendingMessages(ctx)
+				assert.NoError(t, err)
+			}(signal)
+		}
+
+		close(signal)
+		wg.Wait()
+
+		var updatedMessages []outboxdb.Message
+		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
+		assert.NoError(t, err)
+
+		fmt.Println(updatedMessages)
 	})
 }
 
