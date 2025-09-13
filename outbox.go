@@ -19,7 +19,7 @@ type Outbox struct {
 }
 
 func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
-	db, err := initalizeDB(conf)
+	db, err := initializeDB(conf)
 	if err != nil {
 		return nil, err
 	}

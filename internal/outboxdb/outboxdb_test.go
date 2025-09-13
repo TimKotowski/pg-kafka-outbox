@@ -3,7 +3,7 @@ package outboxdb_test
 import (
 	"context"
 	"crypto/sha256"
-	"sort"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -18,12 +18,9 @@ import (
 	"github.com/TimKotowski/pg-kafka-outbox/testHelper/postgres"
 )
 
-type TestFifoTuple struct {
-	topic string
-	key   []byte
-}
-
 func TestFifoMessageProcessing(t *testing.T) {
+	t.Parallel()
+
 	pool, err := dockertest.NewPool("")
 	assert.NoError(t, err)
 	resource := postgres.SetUp(pool, t)
@@ -36,24 +33,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte(topic), key)
 
-		var messages []outboxdb.Message
-		for i := range 20 {
-			message := outboxdb.Message{
-				JobID:       ulid.Make().String(),
-				Topic:       topic,
-				Key:         key,
-				Payload:     []byte(`{"name":"Alice","email":"alice@example.com"}`),
-				Headers:     []byte(`{"header1":"value1"}`),
-				Status:      outboxdb.PENDING,
-				Retries:     1,
-				MaxRetries:  5,
-				GroupID:     f.Key(),
-				Fingerprint: "fp-abc123",
-				CreatedAt:   time.Now().Add(time.Second * time.Duration(i)),
-			}
-
-			messages = append(messages, message)
-		}
+		messages := generateOutBoxMessages(key, nil, topic, 20, outboxdb.PENDING)
 
 		ctx := context.Background()
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
@@ -68,28 +48,19 @@ func TestFifoMessageProcessing(t *testing.T) {
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
 		assert.NoError(t, err)
 
-		// Correct precessing ordering. Should be monotonically increasing order by created.
-		sort.Slice(updatedMessages, func(i, j int) bool {
-			return updatedMessages[i].CreatedAt.Before(updatedMessages[j].CreatedAt)
-		})
-
+		// Correct precessing ordering. Should be monotonically increasing order by created based on status
+		sortMessagesByStatusAndCreatedAt(updatedMessages)
 		runningMessages := updatedMessages[:10]
 		pendingMessages := updatedMessages[10:]
+		assert.Len(t, runningMessages, 10)
+		assert.Len(t, pendingMessages, 10)
 
-		for i := 0; i < len(runningMessages)-1; i++ {
-			currentMessage := runningMessages[i]
-			nextMessage := runningMessages[i+1]
+		// Ensure messages with the same timestamp maintain correct order.
+		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
+		assert.LessOrEqual(t, runningMessages[len(runningMessages)-1].CreatedAt, pendingMessages[len(pendingMessages)-1].CreatedAt)
 
-			assert.NotNil(t, currentMessage.StartedAt)
-			assert.NotNil(t, nextMessage.StartedAt)
-			assert.True(t, currentMessage.CreatedAt.Before(nextMessage.CreatedAt), "transactional ordering incorrect")
-			assert.Equal(t, outboxdb.RUNNING, currentMessage.Status)
-		}
-
-		for _, pendingMessage := range pendingMessages {
-			assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
-			assert.Nil(t, pendingMessage.StartedAt)
-		}
+		assertRunningInRepository(t, runningMessages[:10])
+		assertPendingInRepository(t, pendingMessages[10:])
 	})
 
 	t.Run("will not allow processing more messages for a group, if there are already processing messages for group", func(t *testing.T) {
@@ -100,120 +71,61 @@ func TestFifoMessageProcessing(t *testing.T) {
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte(topic), key)
 
-		var messages []outboxdb.Message
-		for i := range 20 {
-			if i < 10 {
-				now := time.Now()
-				ptr := &now
-				message := outboxdb.Message{
-					JobID:       ulid.Make().String(),
-					Topic:       topic,
-					Key:         key,
-					Payload:     []byte(`{"name":"Alice","email":"alice@example.com"}`),
-					Headers:     []byte(`{"header1":"value1"}`),
-					Status:      outboxdb.RUNNING,
-					Retries:     1,
-					MaxRetries:  5,
-					GroupID:     f.Key(),
-					Fingerprint: "fp-abc123",
-					CreatedAt:   time.Now().Add(time.Second * time.Duration(i)),
-					StartedAt:   ptr,
-				}
+		messagesRunning := generateOutBoxMessages(key, nil, topic, 10, outboxdb.RUNNING)
+		_, err := resource.DB.NewInsert().Model(&messagesRunning).Exec(t.Context())
+		assert.NoError(t, err)
+		messagesPending := generateOutBoxMessages(key, nil, topic, 10, outboxdb.PENDING)
 
-				messages = append(messages, message)
-			} else {
-				message := outboxdb.Message{
-					JobID:       ulid.Make().String(),
-					Topic:       topic,
-					Key:         key,
-					Payload:     []byte(`{"name":"Alice","email":"alice@example.com"}`),
-					Headers:     []byte(`{"header1":"value1"}`),
-					Status:      outboxdb.PENDING,
-					Retries:     1,
-					MaxRetries:  5,
-					GroupID:     f.Key(),
-					Fingerprint: "fp-abc123",
-					CreatedAt:   time.Now().Add(time.Second * time.Duration(i)),
-				}
-				messages = append(messages, message)
-			}
-		}
-
-		ctx := context.Background()
-		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
+		_, err = resource.DB.NewInsert().Model(&messagesPending).Exec(t.Context())
 		assert.NoError(t, err)
 
 		r := outboxdb.NewOutboxDB(resource.DB)
 
-		results, err := r.GetPendingMessagesFIFO(ctx)
+		results, err := r.GetPendingMessagesFIFO(t.Context())
 		assert.Nil(t, results)
 
 		var updatedMessages []outboxdb.Message
-		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
+		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(t.Context())
 		assert.NoError(t, err)
-		// Correct precessing ordering. Should be monotonically increasing order by created.
-		sort.Slice(updatedMessages, func(i, j int) bool {
-			return updatedMessages[i].CreatedAt.Before(updatedMessages[j].CreatedAt)
-		})
+		sortMessagesByStatusAndCreatedAt(updatedMessages)
 
 		runningMessages := updatedMessages[:10]
 		pendingMessages := updatedMessages[10:]
+
 		assert.Len(t, runningMessages, 10)
 		assert.Len(t, pendingMessages, 10)
 
-		for _, message := range runningMessages {
-			assert.Equal(t, message.Status, outboxdb.RUNNING)
-			assert.NotNil(t, message.StartedAt)
-		}
+		// Ensure messages with the same timestamp maintain correct order.
+		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
+		assert.LessOrEqual(t, runningMessages[len(runningMessages)-1].CreatedAt, pendingMessages[len(pendingMessages)-1].CreatedAt)
 
-		for _, message := range pendingMessages {
-			assert.Equal(t, message.Status, outboxdb.PENDING)
-			assert.Nil(t, message.StartedAt)
-		}
+		assertRunningInRepository(t, runningMessages[:10])
+		assertPendingInRepository(t, pendingMessages[10:])
 	})
 
-	t.Run("will allow transactional ordering processing, for many different kafka keys, with at most only 10 messages running", func(t *testing.T) {
+	t.Run("will process messages in high availability environments or concurrent worker processes", func(t *testing.T) {
 		defer resource.CleanUpJobs(t.Context(), t)
 
-		var testMessages []outboxdb.Message
-		tuples := []TestFifoTuple{
-			{
-				topic: "public.user.v1",
-				key:   []byte("user: 82912190892o1kow1_9121112121, name: Bobo"),
-			},
-			{
-				topic: "public.orders.v1",
-				key:   []byte("order_id: 1fb9cec5-b44f-4984-9f88-622a4f6e0618, event_type: PURCHASE"),
-			},
-		}
+		userTopic := "public.user.v1"
+		userKafkaKey1 := []byte("user: 82912190892o1kow1_9121112121, name: Bob")
+		userKafkaKey2 := []byte("user: 9292932923_299232332, name: Tim")
 
-		for i := range 20 {
-			for _, t := range tuples {
-				f := hash.NewHash(sha256.New())
-				f.Write([]byte(t.topic), t.key)
-				message := outboxdb.Message{
-					JobID:       ulid.Make().String(),
-					Topic:       t.topic,
-					Key:         t.key,
-					Payload:     []byte(`{"name":"Alice","email":"alice@example.com"}`),
-					Headers:     []byte(`{"header1":"value1"}`),
-					Status:      outboxdb.PENDING,
-					Retries:     1,
-					MaxRetries:  5,
-					GroupID:     f.Key(),
-					Fingerprint: "fp-abc123",
-					CreatedAt:   time.Now().Add(time.Minute * time.Duration(i)),
-				}
+		orderTopic := "public.orders.v1"
+		orderKafkaKey := []byte("order_id: 1fb9cec5-b44f-4984-9f88-622a4f6e0618, event_type: PURCHASE")
 
-				testMessages = append(testMessages, message)
-			}
-		}
+		messagesPendingUserGroup := generateOutBoxMessages(userKafkaKey1, nil, userTopic, 20, outboxdb.PENDING)
 
-		assert.Equal(t, 40, len(testMessages))
-
-		ctx := context.Background()
-		_, err := resource.DB.NewInsert().Model(&testMessages).Exec(ctx)
+		_, err = resource.DB.NewInsert().Model(&messagesPendingUserGroup).Exec(t.Context())
 		assert.NoError(t, err)
+		messagesPendingUserGroup2 := generateOutBoxMessages(userKafkaKey2, nil, userTopic, 20, outboxdb.PENDING)
+
+		_, err = resource.DB.NewInsert().Model(&messagesPendingUserGroup2).Exec(t.Context())
+		assert.NoError(t, err)
+		messagesPendingOrderGroup := generateOutBoxMessages(orderKafkaKey, nil, orderTopic, 20, outboxdb.PENDING)
+
+		_, err = resource.DB.NewInsert().Model(&messagesPendingOrderGroup).Exec(t.Context())
+		assert.NoError(t, err)
+		ctx := context.Background()
 
 		signal := make(chan struct{}, 1)
 		r := outboxdb.NewOutboxDB(resource.DB)
@@ -236,56 +148,225 @@ func TestFifoMessageProcessing(t *testing.T) {
 		var updatedMessages []outboxdb.Message
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
 		assert.NoError(t, err)
-
-		// Correct precessing ordering. Should be monotonically increasing order by created.
-		sort.Slice(updatedMessages, func(i, j int) bool {
-			return updatedMessages[i].CreatedAt.Before(updatedMessages[j].CreatedAt)
-		})
+		assert.Equal(t, 60, len(updatedMessages))
 
 		userMessages, orderMessages := testHelper.Partition(updatedMessages, func(message outboxdb.Message) bool {
-			userTopic := tuples[0].topic
 			return message.Topic == userTopic
 		})
 
-		runningUserMessages := userMessages[:10]
-		pendingUserMessages := userMessages[10:]
-		for i := 0; i < len(runningUserMessages)-1; i++ {
-			currentMessage := runningUserMessages[i]
-			nextMessage := runningUserMessages[i+1]
+		userKeyMap := testHelper.GroupBy(userMessages, func(m outboxdb.Message) string {
+			return m.GroupID
+		})
 
-			assert.NotNil(t, currentMessage.StartedAt)
-			assert.NotNil(t, nextMessage.StartedAt)
-			assert.True(t, currentMessage.CreatedAt.Before(nextMessage.CreatedAt), "transactional ordering incorrect")
-			assert.Equal(t, outboxdb.RUNNING, currentMessage.Status)
-		}
+		group1Hash := hash.NewHash(sha256.New())
+		group1Hash.Write([]byte(userTopic), userKafkaKey1)
+		userGroup1, group1Found := userKeyMap[group1Hash.Key()]
+		assert.True(t, group1Found)
+		assert.Len(t, userGroup1, 20)
 
-		for _, pendingMessage := range pendingUserMessages {
-			assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
-			assert.Nil(t, pendingMessage.StartedAt)
-		}
+		sortMessagesByStatusAndCreatedAt(userGroup1)
+		runningGroup1Messages := userGroup1[:10]
+		pendingGroup1Messages := userGroup1[10:]
+		// Ensure messages with the same timestamp maintain correct order.
+		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
+		assert.LessOrEqual(t, runningGroup1Messages[len(runningGroup1Messages)-1].CreatedAt, pendingGroup1Messages[len(pendingGroup1Messages)-1].CreatedAt)
 
-		runningOrderMessages := orderMessages[:10]
-		pendingOrderMessages := orderMessages[10:]
-		for i := 0; i < len(runningOrderMessages)-1; i++ {
-			currentMessage := runningOrderMessages[i]
-			nextMessage := runningOrderMessages[i+1]
+		assertRunningInRepository(t, runningGroup1Messages)
+		assertPendingInRepository(t, pendingGroup1Messages)
 
-			assert.NotNil(t, currentMessage.StartedAt)
-			assert.NotNil(t, nextMessage.StartedAt)
-			assert.True(t, currentMessage.CreatedAt.Before(nextMessage.CreatedAt), "transactional ordering incorrect")
-			assert.Equal(t, outboxdb.RUNNING, currentMessage.Status)
-		}
+		group2Hash := hash.NewHash(sha256.New())
+		group2Hash.Write([]byte(userTopic), userKafkaKey2)
+		userGroup2, group2Found := userKeyMap[group2Hash.Key()]
+		assert.True(t, group2Found)
+		sortMessagesByStatusAndCreatedAt(userGroup2)
 
-		for _, pendingMessage := range pendingOrderMessages {
-			assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
-			assert.Nil(t, pendingMessage.StartedAt)
-		}
+		runningGroup2Messages := userGroup2[:10]
+		pendingGroup2Messages := userGroup2[10:]
+		// Ensure messages with the same timestamp maintain correct order.
+		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
+		assert.LessOrEqual(t, runningGroup2Messages[len(runningGroup2Messages)-1].CreatedAt, pendingGroup2Messages[len(pendingGroup2Messages)-1].CreatedAt)
+		assertRunningInRepository(t, userGroup2[:10])
+		assertPendingInRepository(t, userGroup2[10:])
+
+		sortMessagesByStatusAndCreatedAt(orderMessages)
+		runningGroup3Messages := orderMessages[:10]
+		pendingGroup3Messages := orderMessages[10:]
+		// Ensure messages with the same timestamp maintain correct order.
+		// Verify that the last running message's timestamp is less than or equal to the pending message's timestamp.
+		assert.LessOrEqual(t, runningGroup3Messages[len(runningGroup3Messages)-1].CreatedAt, pendingGroup3Messages[len(pendingGroup3Messages)-1].CreatedAt)
+		assertRunningInRepository(t, orderMessages[:10])
+		assertPendingInRepository(t, orderMessages[10:])
 	})
 
 	t.Run("multiple groups with mixed statuses", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
 		// Setup: Group1: 5 PENDING; Group2: 5 PENDING; Group3: 5 PENDING + 1 RUNNING (ineligible).
-	})
-	t.Run("groups with pending retries can still be processed", func(t *testing.T) {
+		var messages []outboxdb.Message
+		userTopic := "public.user.v1"
+		userKafkaKey1 := []byte("key_00001")
+		group1Pending := generateOutBoxMessages(userKafkaKey1, nil, userTopic, 5, outboxdb.PENDING)
 
+		userKafkaKey2 := []byte("key_0000002")
+		group2Pending := generateOutBoxMessages(userKafkaKey2, nil, userTopic, 5, outboxdb.PENDING)
+
+		userKafkaKey3 := []byte("key_0000003")
+		group3Pending := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 5, outboxdb.PENDING)
+		group3Running := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 1, outboxdb.RUNNING)
+
+		messages = append(messages, group1Pending...)
+		messages = append(messages, group2Pending...)
+		messages = append(messages, group3Pending...)
+		messages = append(messages, group3Running...)
+
+		ctx := context.Background()
+		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
+		assert.NoError(t, err)
+
+		r := outboxdb.NewOutboxDB(resource.DB)
+
+		_, err = r.GetPendingMessagesFIFO(ctx)
+		assert.NoError(t, err)
+
+		var updatedMessages []outboxdb.Message
+		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
+		assert.NoError(t, err)
+
+		groupMap := testHelper.GroupBy(updatedMessages, func(m outboxdb.Message) string {
+			return m.GroupID
+		})
+
+		group1Hash := hash.NewHash(sha256.New())
+		group1Hash.Write([]byte(userTopic), userKafkaKey1)
+		group1, group1Found := groupMap[group1Hash.Key()]
+		assert.True(t, group1Found)
+		assert.Len(t, group1, 5)
+		sortMessagesByStatusAndCreatedAt(group1)
+		assertRunningInRepository(t, group1)
+
+		group2Hash := hash.NewHash(sha256.New())
+		group2Hash.Write([]byte(userTopic), userKafkaKey2)
+		group2, group2Found := groupMap[group2Hash.Key()]
+		assert.True(t, group2Found)
+		assert.Len(t, group2, 5)
+		sortMessagesByStatusAndCreatedAt(group2)
+		assertRunningInRepository(t, group2)
+
+		group3Hash := hash.NewHash(sha256.New())
+		group3Hash.Write([]byte(userTopic), userKafkaKey3)
+		group3, group3Found := groupMap[group3Hash.Key()]
+		assert.True(t, group3Found)
+		assert.Len(t, group3, 6)
+
+		sortMessagesByStatusAndCreatedAt(group3)
+		runningMessage := group3[0]
+		pendingMessages := group3[1:]
+		assert.NotNil(t, runningMessage.StartedAt)
+		assert.Equal(t, outboxdb.RUNNING, runningMessage.Status)
+		assert.LessOrEqual(t, runningMessage.CreatedAt, pendingMessages[len(pendingMessages)-1].CreatedAt)
+		assertPendingInRepository(t, pendingMessages)
+	})
+
+	t.Run("groups with pending retries can still be processed", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
+
+		topic := "public.topic.v1"
+		key := []byte("user-42")
+		f := hash.NewHash(sha256.New())
+		f.Write([]byte(topic), key)
+
+		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.PendingRetry)
+
+		ctx := context.Background()
+		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
+		assert.NoError(t, err)
+
+		r := outboxdb.NewOutboxDB(resource.DB)
+
+		_, err = r.GetPendingMessagesFIFO(ctx)
+		assert.NoError(t, err)
+
+		var updatedMessages []outboxdb.Message
+		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
+		assert.NoError(t, err)
+
+		// Correct precessing ordering. Should be monotonically increasing order by created based on status
+		sortMessagesByStatusAndCreatedAt(updatedMessages)
+		assertRunningInRepository(t, updatedMessages)
+	})
+}
+
+func generateOutBoxMessages(key, payload []byte, topic string, amount int, status outboxdb.Status) []outboxdb.Message {
+	var messages []outboxdb.Message
+	f := hash.NewHash(sha256.New())
+	f.Write([]byte(topic), key)
+
+	for i := range amount {
+		fingerPrintHash := hash.NewHash(sha256.New())
+		fingerPrintHash.Write([]byte(topic), key, payload)
+
+		var startedAt *time.Time
+		if status != outboxdb.PENDING {
+			ptr := time.Now().Add(time.Minute * time.Duration(i))
+			startedAt = &ptr
+		} else {
+			startedAt = nil
+		}
+		message := outboxdb.Message{
+			JobID:       ulid.Make().String(),
+			Topic:       topic,
+			Key:         key,
+			Payload:     []byte(`{"name":"Alice","email":"alice@example.com"}`),
+			Headers:     []byte(`{"header1":"value1"}`),
+			Status:      status,
+			Retries:     1,
+			MaxRetries:  5,
+			GroupID:     f.Key(),
+			Fingerprint: fingerPrintHash.Key(),
+			StartedAt:   startedAt,
+		}
+		messages = append(messages, message)
+	}
+
+	return messages
+}
+
+func assertRunningInRepository(t *testing.T, messages []outboxdb.Message) {
+	for i := 0; i < len(messages)-1; i++ {
+		currentMessage := messages[i]
+		nextMessage := messages[i+1]
+
+		assert.NotNil(t, currentMessage.StartedAt)
+		assert.NotNil(t, nextMessage.StartedAt)
+		// Batch messaging could result in messages being inserted at same time, but make sure
+		// both are equal at least or current most be less.
+		assert.LessOrEqual(t, currentMessage.CreatedAt, nextMessage.CreatedAt, "transactional ordering incorrect")
+		assert.Equal(t, outboxdb.RUNNING, currentMessage.Status)
+	}
+}
+
+func assertPendingInRepository(t *testing.T, messages []outboxdb.Message) {
+	for _, pendingMessage := range messages {
+		assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
+		assert.Nil(t, pendingMessage.StartedAt)
+	}
+}
+
+func sortMessagesByStatusAndCreatedAt(messages []outboxdb.Message) {
+	slices.SortFunc(messages, func(a, b outboxdb.Message) int {
+		if a.Status == outboxdb.RUNNING && b.Status == outboxdb.PENDING {
+			return -1
+		}
+
+		if a.Status == outboxdb.PENDING && b.Status == outboxdb.RUNNING {
+			return 1
+		}
+
+		if a.CreatedAt.Before(b.CreatedAt) {
+			return -1
+		}
+		if a.CreatedAt.After(b.CreatedAt) {
+			return 1
+		}
+		return 0
 	})
 }

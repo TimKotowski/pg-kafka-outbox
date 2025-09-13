@@ -34,7 +34,7 @@ type Resource struct {
 
 	ContainerName string
 
-	ConstainerID string
+	ContainerId string
 }
 
 func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
@@ -81,7 +81,7 @@ func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
 		Dsn:           databaseURL,
 		DB:            db,
 		ContainerName: resource.Container.Name,
-		ConstainerID:  resource.Container.ID,
+		ContainerId:   resource.Container.ID,
 	}
 }
 
