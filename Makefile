@@ -1,11 +1,10 @@
 .PHONY:
 test:
-	@mkdir -p tmp/
-	@go install github.com/jstemmer/go-junit-report/v2@latest
 	@go install gotest.tools/gotestsum@latest
+
+	@mkdir -p tmp/
 	@gotestsum \
 		--junitfile tmp/test-report.xml \
-		--format testname \
 		-- \
 		-race \
 		-count 1 \
