@@ -20,3 +20,10 @@ jobs:
       - name: Run tests
         run: |
           make test
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: tmp/test-report.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
