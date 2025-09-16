@@ -1,24 +1,26 @@
-.PHONY:
 test:
 	@go install gotest.tools/gotestsum@latest
 
 	@mkdir -p tmp/
 	@gotestsum \
 		--junitfile tmp/test-report.xml \
+		--format pkgname-and-test-fails \
 		-- \
 		-race \
-		-count 1 \
-		-coverprofile=tmp/coverage.out \
+		-coverprofile=tmp/coverage.txt \
+		-failfast \
+		-shuffle=on \
+		-p=2 \
+		-covermode=atomic \
 		./...
 
 coverage:
-	@go tool cover -html=tmp/coverage.out
+	@go tool cover -html=tmp/coverage.txt
 
-.PHONY:
 go-version:
 	@go version
 
-.PHONY:
+.PHONY: dev
 dev:
 	docker compose -f ./compose/compose.yaml up
 

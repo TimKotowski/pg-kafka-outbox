@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -67,7 +66,6 @@ func SetUp(pool *dockertest.Pool, t *testing.T) Resource {
 		postgresDefaultDB,
 	)
 
-	pool.MaxWait = 20 * time.Second
 	db, err := pgIsReady(pool, databaseURL)
 	assert.NoError(t, err)
 	assert.NotNil(t, db, "something went horribly wrong, db connection unsuccessful")
