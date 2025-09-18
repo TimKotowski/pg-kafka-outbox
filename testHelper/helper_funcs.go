@@ -26,3 +26,13 @@ func Partition[V any](elements []V, predicate func(V) bool) ([]V, []V) {
 
 	return first, second
 }
+
+func Map[T, V any](elements []T, item func(T) V) []V {
+	destination := make([]V, len(elements))
+
+	for i, element := range elements {
+		destination[i] = item(element)
+	}
+
+	return destination
+}

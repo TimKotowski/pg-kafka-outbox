@@ -6,11 +6,11 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/ory/dockertest"
 	"github.com/stretchr/testify/assert"
+	"github.com/uptrace/bun"
 
 	"github.com/TimKotowski/pg-kafka-outbox/hash"
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
@@ -27,21 +27,21 @@ func TestFifoMessageProcessing(t *testing.T) {
 
 	t.Run("will allow order processing semantics,  with at most only 10 messages running", func(t *testing.T) {
 		defer resource.CleanUpJobs(t.Context(), t)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
 		topic := "public.topic.v1"
 		key := []byte("user-42")
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte(topic), key)
 
-		messages := generateOutBoxMessages(key, nil, topic, 20, outboxdb.PENDING)
+		messages := generateOutBoxMessages(key, nil, topic, 20, outboxdb.Pending)
+		assert.NoError(t, err)
 
 		ctx := context.Background()
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB, 0)
-
-		_, err = r.GetPendingMessagesFIFO(ctx)
+		_, err = r.ClaimPendingMessagesForProcessingFIFO(ctx)
 		assert.NoError(t, err)
 
 		var updatedMessages []outboxdb.Message
@@ -65,23 +65,27 @@ func TestFifoMessageProcessing(t *testing.T) {
 
 	t.Run("will not allow processing more messages for a group, if there are already processing messages for group", func(t *testing.T) {
 		defer resource.CleanUpJobs(t.Context(), t)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
 		topic := "public.topic.v1"
 		key := []byte("user-42")
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte(topic), key)
 
-		messagesRunning := generateOutBoxMessages(key, nil, topic, 10, outboxdb.RUNNING)
+		messagesRunning := generateOutBoxMessages(key, nil, topic, 10, outboxdb.Pending)
 		_, err := resource.DB.NewInsert().Model(&messagesRunning).Exec(t.Context())
 		assert.NoError(t, err)
 
-		messagesPending := generateOutBoxMessages(key, nil, topic, 10, outboxdb.PENDING)
+		jobIds := testHelper.Map(messagesRunning, func(m outboxdb.Message) string {
+			return m.JobId
+		})
+		updateMessages(t, jobIds, resource.DB, outboxdb.Running, r)
+
+		messagesPending := generateOutBoxMessages(key, nil, topic, 10, outboxdb.Pending)
 		_, err = resource.DB.NewInsert().Model(&messagesPending).Exec(t.Context())
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB, 0)
-
-		results, err := r.GetPendingMessagesFIFO(t.Context())
+		results, err := r.ClaimPendingMessagesForProcessingFIFO(t.Context())
 		assert.Nil(t, results)
 
 		var updatedMessages []outboxdb.Message
@@ -113,15 +117,15 @@ func TestFifoMessageProcessing(t *testing.T) {
 		orderTopic := "public.orders.v1"
 		orderKafkaKey := []byte("order_id: 1fb9cec5-b44f-4984-9f88-622a4f6e0618, event_type: PURCHASE")
 
-		messagesPendingUserGroup := generateOutBoxMessages(userKafkaKey1, nil, userTopic, 20, outboxdb.PENDING)
+		messagesPendingUserGroup := generateOutBoxMessages(userKafkaKey1, nil, userTopic, 20, outboxdb.Pending)
 
 		_, err = resource.DB.NewInsert().Model(&messagesPendingUserGroup).Exec(t.Context())
 		assert.NoError(t, err)
-		messagesPendingUserGroup2 := generateOutBoxMessages(userKafkaKey2, nil, userTopic, 20, outboxdb.PENDING)
+		messagesPendingUserGroup2 := generateOutBoxMessages(userKafkaKey2, nil, userTopic, 20, outboxdb.Pending)
 
 		_, err = resource.DB.NewInsert().Model(&messagesPendingUserGroup2).Exec(t.Context())
 		assert.NoError(t, err)
-		messagesPendingOrderGroup := generateOutBoxMessages(orderKafkaKey, nil, orderTopic, 20, outboxdb.PENDING)
+		messagesPendingOrderGroup := generateOutBoxMessages(orderKafkaKey, nil, orderTopic, 20, outboxdb.Pending)
 
 		_, err = resource.DB.NewInsert().Model(&messagesPendingOrderGroup).Exec(t.Context())
 		assert.NoError(t, err)
@@ -138,7 +142,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 				defer wg.Done()
 
 				r := outboxdb.NewOutboxDB(resource.DB, 0)
-				_, err := r.GetPendingMessagesFIFO(ctx)
+				_, err := r.ClaimPendingMessagesForProcessingFIFO(ctx)
 				errChan <- err
 			}(signal)
 		}
@@ -205,32 +209,36 @@ func TestFifoMessageProcessing(t *testing.T) {
 	})
 
 	t.Run("multiple groups with mixed statuses", func(t *testing.T) {
-		// Setup: Group1: 5 PENDING; Group2: 5 PENDING; Group3: 5 PENDING + 1 RUNNING (ineligible).
+		// Setup: Group1: 5 Pending; Group2: 5 Pending; Group3: 5 Pending + 1 Running (ineligible).
 		defer resource.CleanUpJobs(t.Context(), t)
-		userTopic := "public.user.v1"
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
+		userTopic := "public.user.v1"
 		userKafkaKey1 := []byte("key_00001")
-		group1Pending := generateOutBoxMessages(userKafkaKey1, nil, userTopic, 5, outboxdb.PENDING)
+		group1Pending := generateOutBoxMessages(userKafkaKey1, nil, userTopic, 5, outboxdb.Pending)
 		_, err = resource.DB.NewInsert().Model(&group1Pending).Exec(t.Context())
 		assert.NoError(t, err)
 
 		userKafkaKey2 := []byte("key_0000002")
-		group2Pending := generateOutBoxMessages(userKafkaKey2, nil, userTopic, 5, outboxdb.PENDING)
+		group2Pending := generateOutBoxMessages(userKafkaKey2, nil, userTopic, 5, outboxdb.Pending)
 		_, err = resource.DB.NewInsert().Model(&group2Pending).Exec(t.Context())
 		assert.NoError(t, err)
 
 		userKafkaKey3 := []byte("key_0000003")
-		group3Running := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 1, outboxdb.RUNNING)
+		group3Running := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 1, outboxdb.Running)
 		_, err = resource.DB.NewInsert().Model(&group3Running).Exec(t.Context())
 		assert.NoError(t, err)
 
-		group3Pending := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 5, outboxdb.PENDING)
+		messageIds := testHelper.Map(group3Running, func(m outboxdb.Message) string {
+			return m.JobId
+		})
+		updateMessages(t, messageIds, resource.DB, outboxdb.Running, r)
+
+		group3Pending := generateOutBoxMessages(userKafkaKey3, nil, userTopic, 5, outboxdb.Pending)
 		_, err = resource.DB.NewInsert().Model(&group3Pending).Exec(t.Context())
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB, 0)
-
-		_, err = r.GetPendingMessagesFIFO(t.Context())
+		_, err = r.ClaimPendingMessagesForProcessingFIFO(t.Context())
 		assert.NoError(t, err)
 
 		var updatedMessages []outboxdb.Message
@@ -264,67 +272,91 @@ func TestFifoMessageProcessing(t *testing.T) {
 		runningMessage := group3[0]
 		pendingMessages := group3[1:]
 		assert.NotNil(t, runningMessage.StartedAt)
-		assert.Equal(t, outboxdb.RUNNING, runningMessage.Status)
+		assert.Equal(t, outboxdb.Running, runningMessage.Status)
 		assertPendingInRepository(t, pendingMessages)
 	})
 
 	t.Run("groups with pending retries can still be processed", func(t *testing.T) {
 		defer resource.CleanUpJobs(t.Context(), t)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
 
 		topic := "public.topic.v1"
 		key := []byte("user-42")
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte(topic), key)
 
-		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.PendingRetry)
+		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.Pending)
+
+		jobIds := testHelper.Map(messages, func(m outboxdb.Message) string {
+			return m.JobId
+		})
+		updateMessages(t, jobIds, resource.DB, outboxdb.PendingRetry, r)
 
 		ctx := context.Background()
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
 		assert.NoError(t, err)
 
-		r := outboxdb.NewOutboxDB(resource.DB, 0)
-
-		_, err = r.GetPendingMessagesFIFO(ctx)
+		_, err = r.ClaimPendingMessagesForProcessingFIFO(ctx)
 		assert.NoError(t, err)
 
 		var updatedMessages []outboxdb.Message
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
 		assert.NoError(t, err)
 
-		// Correct precessing ordering. Should be monotonically increasing order by created based on status
 		sortMessagesByStatusAndCreatedAt(updatedMessages)
 		assertRunningInRepository(t, updatedMessages)
 	})
 
-	//t.Run("completed and failed jobs will not get processed", func(t *testing.T) {
-	//	defer resource.CleanUpJobs(t.Context(), t)
-	//
-	//	topic := "public.topic.v1"
-	//	userKafkaKey1 := []byte("key_00001")
-	//	completed := generateOutBoxMessages(userKafkaKey1, nil, topic, 15, outboxdb.COMPLETED)
-	//	_, err = resource.DB.NewInsert().Model(&completed).Exec(t.Context())
-	//	assert.NoError(t, err)
-	//
-	//	failed := generateOutBoxMessages(userKafkaKey1, nil, topic, 2, outboxdb.FAILED)
-	//	_, err = resource.DB.NewInsert().Model(&failed).Exec(t.Context())
-	//	assert.NoError(t, err)
-	//
-	//	pending := generateOutBoxMessages(userKafkaKey1, nil, topic, 5, outboxdb.PENDING)
-	//	_, err = resource.DB.NewInsert().Model(&pending).Exec(t.Context())
-	//	assert.NoError(t, err)
-	//
-	//	r := outboxdb.NewOutboxDB(resource.DB, 0)
-	//	_, err = r.GetPendingMessagesFIFO(t.Context())
-	//	assert.NoError(t, err)
-	//
-	//	var updatedMessages []outboxdb.Message
-	//	err = resource.DB.NewSelect().Model(&updatedMessages).Scan(t.Context())
-	//	assert.NoError(t, err)
-	//
-	//	// Correct precessing ordering. Should be monotonically increasing order by created based on status
-	//	sortMessagesByStatusAndCreatedAt(updatedMessages)
-	//	assertRunningInRepository(t, updatedMessages)
-	//})
+	t.Run("completed and failed jobs will not get processed", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
+		r := outboxdb.NewOutboxDB(resource.DB, 0)
+
+		topic := "public.topic.v1"
+		userKafkaKey1 := []byte("key_00001")
+		completed := generateOutBoxMessages(userKafkaKey1, nil, topic, 15, outboxdb.Pending)
+		_, err = resource.DB.NewInsert().Model(&completed).Exec(t.Context())
+		assert.NoError(t, err)
+
+		messageIds := testHelper.Map(completed, func(m outboxdb.Message) string {
+			return m.JobId
+		})
+		updateMessages(t, messageIds, resource.DB, outboxdb.Running, r)
+		updateMessages(t, messageIds, resource.DB, outboxdb.Completed, r)
+
+		failed := generateOutBoxMessages(userKafkaKey1, nil, topic, 2, outboxdb.Pending)
+		_, err = resource.DB.NewInsert().Model(&failed).Exec(t.Context())
+		assert.NoError(t, err)
+
+		failedJobIds := testHelper.Map(failed, func(m outboxdb.Message) string {
+			return m.JobId
+		})
+		updateMessages(t, failedJobIds, resource.DB, outboxdb.Running, r)
+		updateMessages(t, failedJobIds, resource.DB, outboxdb.Failed, r)
+
+		pending := generateOutBoxMessages(userKafkaKey1, nil, topic, 5, outboxdb.Pending)
+		_, err = resource.DB.NewInsert().Model(&pending).Exec(t.Context())
+		assert.NoError(t, err)
+
+		_, err = r.ClaimPendingMessagesForProcessingFIFO(t.Context())
+		assert.NoError(t, err)
+
+		var updatedMessages []outboxdb.Message
+		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(t.Context())
+		assert.NoError(t, err)
+
+		runningJobsIds := testHelper.Map(pending, func(m outboxdb.Message) string {
+			return m.JobId
+		})
+
+		var expectedRunnnMessages []outboxdb.Message
+		err = resource.DB.NewSelect().
+			Model(&expectedRunnnMessages).
+			Where("job_id IN (?)", bun.In(runningJobsIds)).
+			Scan(t.Context())
+		assert.NoError(t, err)
+
+		assertRunningInRepository(t, expectedRunnnMessages)
+	})
 }
 
 func TestStandardMessageProcessing(t *testing.T) {
@@ -342,7 +374,7 @@ func TestStandardMessageProcessing(t *testing.T) {
 		f := hash.NewHash(sha256.New())
 		f.Write([]byte(topic), key)
 
-		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.PENDING)
+		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.Pending)
 
 		ctx := context.Background()
 		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
@@ -358,8 +390,8 @@ func TestStandardMessageProcessing(t *testing.T) {
 				<-signal
 				defer wg.Done()
 
-				r := outboxdb.NewOutboxDB(resource.DB, 1)
-				_, err := r.GetPendingMessages(ctx)
+				r := outboxdb.NewOutboxDB(resource.DB, 5)
+				_, err := r.ClaimPendingMessagesForProcessing(ctx)
 				errChan <- err
 			}(signal)
 		}
@@ -375,6 +407,32 @@ func TestStandardMessageProcessing(t *testing.T) {
 		var updatedMessages []outboxdb.Message
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
 		assert.NoError(t, err)
+		assertRunningInRepository(t, updatedMessages)
+	})
+
+	t.Run("willa not process messages if there are none to process", func(t *testing.T) {
+		defer resource.CleanUpJobs(t.Context(), t)
+		r := outboxdb.NewOutboxDB(resource.DB, 5)
+
+		topic := "public.topic.v1"
+		key := []byte("user-42")
+		f := hash.NewHash(sha256.New())
+		f.Write([]byte(topic), key)
+
+		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.Pending)
+
+		ctx := context.Background()
+		_, err := resource.DB.NewInsert().Model(&messages).Exec(ctx)
+		assert.NoError(t, err)
+
+		messageIds := testHelper.Map(messages, func(m outboxdb.Message) string {
+			return m.JobId
+		})
+		updateMessages(t, messageIds, resource.DB, outboxdb.Running, r)
+
+		processingMessages, err := r.ClaimPendingMessagesForProcessing(ctx)
+		assert.NoError(t, err)
+		assert.Nil(t, processingMessages)
 	})
 }
 
@@ -383,50 +441,21 @@ func generateOutBoxMessages(key, payload []byte, topic string, amount int, statu
 	f := hash.NewHash(sha256.New())
 	f.Write([]byte(topic), key)
 
-	createdOffset := -15 * time.Second
-	completedOffset := 1 * time.Minute
-
 	for range amount {
 		fingerPrintHash := hash.NewHash(sha256.New())
 		fingerPrintHash.Write([]byte(topic), key, payload)
 
-		now := time.Now().UTC()
-		createdAt := now
-		var startedAt, completedAt *time.Time
-
-		switch status {
-		case outboxdb.COMPLETED:
-			ptr := now
-			startedAt = &ptr
-			ptr = now.Add(completedOffset)
-			completedAt = &ptr
-			createdAt = now.Add(createdOffset)
-		case outboxdb.FAILED:
-			createdAt = now.Add(createdOffset)
-		case outboxdb.PENDING:
-		case outboxdb.PendingRetry:
-		case outboxdb.RUNNING:
-			ptr := now
-			startedAt = &ptr
-			createdAt = now.Add(createdOffset)
-		default:
-			return nil
-		}
-
 		message := outboxdb.Message{
-			JobID:       ulid.Make().String(),
+			JobId:       ulid.Make().String(),
 			Topic:       topic,
 			Key:         key,
 			Payload:     payload,
 			Headers:     nil,
 			Status:      status,
-			Retries:     1,
+			Retries:     0,
 			MaxRetries:  5,
 			GroupID:     f.Key(),
 			Fingerprint: fingerPrintHash.Key(),
-			StartedAt:   startedAt,
-			CompletedAt: completedAt,
-			CreatedAt:   createdAt,
 		}
 		messages = append(messages, message)
 	}
@@ -444,24 +473,24 @@ func assertRunningInRepository(t *testing.T, messages []outboxdb.Message) {
 		// Batch messaging could result in messages being inserted at same time, but make sure
 		// both are equal at least or current most be less.
 		assert.LessOrEqual(t, currentMessage.CreatedAt, nextMessage.CreatedAt, "transactional ordering incorrect")
-		assert.Equal(t, outboxdb.RUNNING, currentMessage.Status)
+		assert.Equal(t, outboxdb.Running, currentMessage.Status)
 	}
 }
 
 func assertPendingInRepository(t *testing.T, messages []outboxdb.Message) {
 	for _, pendingMessage := range messages {
-		assert.Equal(t, outboxdb.PENDING, pendingMessage.Status)
+		assert.Equal(t, outboxdb.Pending, pendingMessage.Status)
 		assert.Nil(t, pendingMessage.StartedAt)
 	}
 }
 
 func sortMessagesByStatusAndCreatedAt(messages []outboxdb.Message) {
 	slices.SortFunc(messages, func(a, b outboxdb.Message) int {
-		if a.Status == outboxdb.RUNNING && b.Status == outboxdb.PENDING {
+		if a.Status == outboxdb.Running && b.Status == outboxdb.Pending {
 			return -1
 		}
 
-		if a.Status == outboxdb.PENDING && b.Status == outboxdb.RUNNING {
+		if a.Status == outboxdb.Pending && b.Status == outboxdb.Running {
 			return 1
 		}
 
@@ -480,4 +509,15 @@ func generateGroupId(topic, key []byte) string {
 	group3Hash.Write(topic, key)
 
 	return group3Hash.Key()
+}
+
+func updateMessages(t *testing.T, jobIds []string, db *bun.DB, status outboxdb.Status, r outboxdb.OutboxDB) {
+	_, err := outboxdb.RunInTxWithReturnType(t.Context(), db, func(tx bun.Tx) ([]outboxdb.Message, error) {
+		m, err := r.UpdateMessagesStatusInTx(t.Context(), jobIds, tx, status)
+		if err != nil {
+			return nil, err
+		}
+		return m, nil
+	})
+	assert.NoError(t, err)
 }
