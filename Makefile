@@ -10,7 +10,6 @@ test:
 		-coverprofile=tmp/coverage.txt \
 		-failfast \
 		-shuffle=on \
-		-p=2 \
 		-covermode=atomic \
 		./...
 
