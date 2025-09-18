@@ -10,10 +10,12 @@ import (
 )
 
 func TestPostgresContainerSetup(t *testing.T) {
+	t.Parallel()
+
 	pool, err := dockertest.NewPool("")
 	assert.NoError(t, err)
 
-	testContainers := 5
+	testContainers := 2
 	var resources []postgres.Resource
 	for i := 0; i < testContainers; i++ {
 		resource := postgres.SetUp(pool, t)

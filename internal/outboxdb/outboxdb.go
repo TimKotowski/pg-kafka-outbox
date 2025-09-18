@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -12,20 +14,21 @@ import (
 )
 
 const (
-	FifoLimit = 10
+	FifoLimit      = 10
+	NoRowsAffected = 0
 )
 
 type OutboxDB interface {
-	// GetPendingMessages find any pending messages that need to be processed.
-	GetPendingMessages(ctx context.Context) ([]Message, error)
+	// ClaimPendingMessagesForProcessing claims any pending messages that need to be processed.
+	ClaimPendingMessagesForProcessing(ctx context.Context) ([]Message, error)
 
-	// GetPendingMessagesFIFO retrieves pending messages in groups by kafka key, that aren't currently being processed.
+	// ClaimPendingMessagesForProcessingFIFO claims pending messages in groups by kafka key, that aren't currently being processed.
 	// Used only if FifoKafkaKeyProcessing is enabled. To ensure FIFO processing of messages per kafka key.
 	//
 	// 1. Only one batch of messages per kafka key can be processed at any given time.
 	// 2. Messages must finish per key, before more are processed. Or when TTL is reached, in which messages will be re-processed.
 	// 3. Messages are processed in the order they were received.
-	GetPendingMessagesFIFO(ctx context.Context) ([]Message, error)
+	ClaimPendingMessagesForProcessingFIFO(ctx context.Context) ([]Message, error)
 
 	// ExistsByFingerprint finds any messages with same fingerprint that are pending or being processed.
 	// This ensures messages with the same fingerprint cant enter the outbox.
@@ -45,20 +48,46 @@ type OutboxDB interface {
 }
 
 type outboxDB struct {
-	db *bun.DB
+	db    *bun.DB
+	limit int
 }
 
-func NewOutboxDB(db *bun.DB) OutboxDB {
+func NewOutboxDB(db *bun.DB, limit int) OutboxDB {
 	return &outboxDB{
-		db: db,
+		db:    db,
+		limit: limit,
 	}
 }
 
-func (r *outboxDB) GetPendingMessages(ctx context.Context) ([]Message, error) {
-	return nil, nil
+func (r *outboxDB) ClaimPendingMessagesForProcessing(ctx context.Context) ([]Message, error) {
+	var messages []Message
+	sub := r.db.NewSelect().
+		Table("outbox").
+		Column("job_id").
+		Where("status IN (?)", bun.In([]string{Pending, PendingRetry})).
+		Order("created_at").
+		Limit(r.limit).
+		For("UPDATE SKIP LOCKED")
+
+	err := r.db.NewUpdate().
+		TableExpr("outbox as o").
+		TableExpr("(?) as sub", sub).
+		Set("retries = o.retries + (?)", 1).
+		Set("started_at = (?)", time.Now().UTC()).
+		Set("updated_at = (?)", time.Now().UTC()).
+		Set("status = (?)", Running).
+		Where("sub.job_id = o.job_id").
+		Returning("o.*").
+		Scan(ctx, &messages)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return messages, nil
 }
 
-func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error) {
+func (r *outboxDB) ClaimPendingMessagesForProcessingFIFO(ctx context.Context) ([]Message, error) {
 	messages, err := RunInTxWithReturnType(ctx, r.db, func(tx bun.Tx) ([]Message, error) {
 		for {
 			eligibleGroupIds, err := r.getEligibleGroupIdsTx(ctx, tx)
@@ -111,11 +140,11 @@ func (r *outboxDB) GetPendingMessagesFIFO(ctx context.Context) ([]Message, error
 			}
 
 			if len(jobIds) == 0 {
-				log.Printf("obtained locks for %v but no messages to update to RUNNING, concurrency timing issue", jobIds)
+				log.Printf("obtained locks for %v but no messages to update to Running, concurrency timing issue", jobIds)
 				return nil, nil
 			}
 
-			messages, err := r.UpdateMessagesStatusInTx(ctx, jobIds, tx, RUNNING)
+			messages, err := r.UpdateMessagesStatusInTx(ctx, jobIds, tx, Running)
 			if err != nil {
 				return nil, err
 			}
@@ -138,7 +167,37 @@ func (r *outboxDB) RequeueOrphanedMessages(ctx context.Context) (int, error) {
 	return 0, nil
 }
 
-func (r *outboxDB) UpdateMessageStatus(ctx context.Context, jobID string, status Status) error {
+func (r *outboxDB) UpdateMessageStatus(ctx context.Context, jobId string, status Status) error {
+	now := time.Now().UTC()
+	baseQuery := r.db.NewUpdate().
+		Table("outbox").
+		Set("retries = outbox.retries + (?)", 1).
+		Set("updated_at = (?)", now).
+		Set("status = (?)", status)
+
+	// Most likely an orphaned job update, allow a clean slate. For re-queueing.
+	if status == PendingRetry || status == Pending {
+		baseQuery.Set("started_at = (?)", nil)
+	}
+	if status == Running {
+		baseQuery.Set("started_at = (?)", now)
+	}
+	if status == Completed {
+		baseQuery.Set("completed_at = (?)", now)
+	}
+
+	res, err := baseQuery.Where("job_id = (?)", jobId).Exec(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == NoRowsAffected {
+		return errors.New(fmt.Sprintf("updating message failed for job_id %s status %s", jobId, status))
+	}
+
 	return nil
 }
 
@@ -148,15 +207,29 @@ func (r *outboxDB) ExistsByFingerprint(ctx context.Context, fingerprint []byte) 
 
 func (r *outboxDB) UpdateMessagesStatusInTx(ctx context.Context, jobIds []string, tx bun.IDB, status Status) ([]Message, error) {
 	var messages []Message
-	err := tx.NewUpdate().
+	now := time.Now().UTC()
+	baseQuery := tx.NewUpdate().
 		Table("outbox").
 		Set("retries = outbox.retries + (?)", 1).
-		Set("started_at = (?)", time.Now().UTC()).
-		Set("updated_at = (?)", time.Now().UTC()).
-		Set("status = (?)", status).
+		Set("updated_at = (?)", now).
+		Set("status = (?)", status)
+
+	// Most likely an orphaned job update, allow a clean slate. For re-queueing.
+	if status == PendingRetry || status == Pending {
+		baseQuery.Set("started_at = (?)", nil)
+	}
+	if status == Running {
+		baseQuery.Set("started_at = (?)", now)
+	}
+	if status == Completed {
+		baseQuery.Set("completed_at = (?)", now)
+	}
+
+	err := baseQuery.
 		Where("job_id IN (?)", bun.In(jobIds)).
 		Returning("*").
 		Scan(ctx, &messages)
+
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +244,7 @@ func (r *outboxDB) getPendingMessagesFIFOTx(ctx context.Context, acquiredGroupID
 		ColumnExpr("o.*").
 		ColumnExpr("ROW_NUMBER() OVER (PARTITION BY o.group_id ORDER BY o.created_at) AS rn").
 		Where("o.group_id IN (?)", bun.In(acquiredGroupIDLocks)).
-		Where("o.status IN (?)", bun.In([]string{PENDING, PendingRetry}))
+		Where("o.status IN (?)", bun.In([]string{Pending, PendingRetry}))
 
 	err := tx.NewSelect().
 		Column("sub.job_id").
@@ -192,12 +265,12 @@ func (r *outboxDB) getEligibleGroupIdsTx(ctx context.Context, tx bun.IDB) ([]str
 		TableExpr("outbox as o2").
 		ColumnExpr("1").
 		Where("o2.group_id = o1.group_id").
-		Where("o2.status = (?)", RUNNING)
+		Where("o2.status = (?)", Running)
 
 	err := tx.NewSelect().
 		TableExpr("outbox as o1").
 		Column("o1.group_id").
-		Where("o1.status IN (?)", bun.In([]string{PENDING, PendingRetry})).
+		Where("o1.status IN (?)", bun.In([]string{Pending, PendingRetry})).
 		Where("NOT EXISTS (?)", subQuery).
 		Group("o1.group_id").
 		OrderExpr("MIN(o1.created_at) ASC").
@@ -211,13 +284,13 @@ func (r *outboxDB) getEligibleGroupIdsTx(ctx context.Context, tx bun.IDB) ([]str
 }
 
 // reCheckEligibleGroupIdsTx will recheck eligibility for acquired group IDs under the advisory lock to prevent processing stale groups that may already be running.
-// In the initial eligibility query (getEligibleGroupIdsTx), a worker could fetch groups with PENDING/PENDING_RETRY messages that don't have any running already.
-// However, another worker that has a lock, could commit its transaction, update messages with groupIds to RUNNING, and release the lock.
+// In the initial eligibility query (getEligibleGroupIdsTx), a worker could fetch groups with Pending/PENDING_RETRY messages that don't have any running already.
+// However, another worker that has a lock, could commit its transaction, update messages with groupIds to Running, and release the lock.
 // But if another worker then acquires the now-free lock, it might of already fetched the same eligible groupIds right before the previous
 // worker which held an advisory lock on same groupIds updated its messages to be running and committed the transaction for same groupIds.
-// Due to concurrency timing issues, this can lead to new batch of messages but with the same groupIds to also be updated to RUNNING when it shouldn't.
+// Due to concurrency timing issues, this can lead to new batch of messages but with the same groupIds to also be updated to Running when it shouldn't.
 // This violates the invariant of only one batch per group processing at a time, until the full batch completed/failed/re-queued.
-// After lock acquisition, just re-query locked groupIds check again, for RUNNING count per group. skip if >0.
+// After lock acquisition, just re-query locked groupIds check again, for Running count per group. skip if >0.
 // Due to FIFO behavior on group ids, and many rows can have same group ids since it's a hash on  (kafka key, topic).
 // FOR UPDATE really cant be applicable here unless creating separate tables for lock group locking and tracking
 // and another table to keep track of jobs running for per group.
@@ -227,7 +300,7 @@ func (r *outboxDB) reCheckEligibleGroupIdsTx(ctx context.Context, lockedGroupIds
 		TableExpr("outbox").
 		Column("group_id").
 		Where("group_id IN (?)", bun.In(lockedGroupIds)).
-		Where("status = (?)", RUNNING).
+		Where("status = (?)", Running).
 		Distinct().
 		Scan(ctx, &alreadyRunningGroupIds)
 	if err != nil {

@@ -24,7 +24,7 @@ func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
 		return nil, err
 	}
 
-	repository := outboxdb.NewOutboxDB(db)
+	repository := outboxdb.NewOutboxDB(db, conf.FetchLimit)
 	worker := newWorker(ctx, conf, repository)
 
 	return &Outbox{

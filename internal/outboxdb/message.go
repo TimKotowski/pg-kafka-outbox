@@ -10,17 +10,17 @@ import (
 type Status = string
 
 const (
-	PENDING      Status = "PENDING"
+	Pending      Status = "PENDING"
 	PendingRetry Status = "PENDING_RETRY"
-	COMPLETED    Status = "COMPLETED"
-	FAILED       Status = "FAILED"
-	RUNNING      Status = "RUNNING"
+	Completed    Status = "COMPLETED"
+	Failed       Status = "FAILED"
+	Running      Status = "RUNNING"
 )
 
 type Message struct {
 	bun.BaseModel `bun:"table:outbox"`
 
-	JobID       string     `bun:"job_id,pk"`
+	JobId       string     `bun:"job_id,pk"`
 	Topic       string     `bun:"topic,notnull"`
 	Key         []byte     `bun:"key"`
 	Payload     []byte     `bun:"payload"`

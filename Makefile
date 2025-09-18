@@ -1,17 +1,25 @@
-test: ## Run all unit tests.
-	go test -timeout 15m ./...
+test:
+	@go install gotest.tools/gotestsum@latest
 
-test-with-race: ## Run all unit tests with data race detection.
-	go test -timeout 15m -race -count 1 ./...
+	@mkdir -p tmp/
+	@gotestsum \
+		--junitfile tmp/test-report.xml \
+		--format pkgname-and-test-fails \
+		-- \
+		-race \
+		-coverprofile=tmp/coverage.txt \
+		-failfast \
+		-shuffle=on \
+		-covermode=atomic \
+		./...
 
-test-coverage: ## run test coverage with coverage output.
-	go test -timeout 15m -race -count 1 -coverprofile=coverage.txt ./...
-	@go tool cover -html=coverage.txt
-	@go tool cover -func=coverage.txt | tail -n1
+coverage:
+	@go tool cover -html=tmp/coverage.txt
 
 go-version:
 	@go version
 
+.PHONY: dev
 dev:
 	docker compose -f ./compose/compose.yaml up
 
