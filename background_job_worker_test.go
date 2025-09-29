@@ -4,21 +4,46 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/jonboulle/clockwork"
 
 	outbox "github.com/TimKotowski/pg-kafka-outbox"
+	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 )
 
+var (
+	_ outbox.JobHandler = &TestJobHandler{}
+)
+
+type TestJobHandler struct {
+	db   outboxdb.OutboxMaintenanceDB
+	conf *outbox.Config
+}
+
+func newTestJobHandler(conf *outbox.Config, db outboxdb.OutboxMaintenanceDB) *TestJobHandler {
+	return &TestJobHandler{
+		db:   db,
+		conf: conf,
+	}
+}
+
+func (t TestJobHandler) PeriodicSchedule() string {
+	panic("*/5 * * * *")
+}
+
+func (t TestJobHandler) Name() string {
+	panic("Test Job")
+}
+
+func (t TestJobHandler) Handle(ctx context.Context) error {
+	return nil
+}
+
 func TestSimpleCronJobRun(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	clock := clockwork.NewFakeClock()
 	config := outbox.NewConfig()
+	testHandler := newTestJobHandler(config, nil)
+	bg := outbox.NewBackgroundJobProcessor(config, nil, clock)
 
-	o, err := outbox.NewFromConfig(ctx, config)
-	assert.NoError(t, err)
-	err = o.Init()
-	assert.NoError(t, err)
-	a := outbox.NewBackgroundJobProcessor()
-
+	bg.Register(testHandler)
+	bg.Start()
 }

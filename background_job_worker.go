@@ -13,6 +13,7 @@ import (
 )
 
 type JobScheduler interface {
+	SetUp()
 	Start()
 	Close()
 }
@@ -37,51 +38,55 @@ type cronJobScheduler struct {
 	nextScheduleTime time.Time
 }
 
-func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxDB) JobScheduler {
+func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxMaintenanceDB, clock clockwork.Clock) *BackgroundJobProcessor {
 	b := baseJobHandler{conf: conf, db: db}
-	handlers := []JobHandler{
-		newCleanUpJob(conf, db),
-		newOrphanedJob(conf, db),
-		newReindexJobHandler(conf, db),
-	}
 	bgJobProcessor := &BackgroundJobProcessor{
 		baseJobHandler: b,
 		registeredJobs: make(map[string]HandleFunc),
-		clock:          clockwork.NewRealClock(),
-		jobMetas:       make([]JobMeta, len(handlers)),
+		clock:          clock,
+		jobMetas:       make([]JobMeta, 0),
 		jobsChan:       make(chan string),
 		shutdown:       make(chan struct{}),
-	}
-
-	for i, j := range handlers {
-		registeredJob := bgJobProcessor.Register(j)
-		bgJobProcessor.registeredJobs[j.Name()] = registeredJob
-		bgJobProcessor.jobMetas[i] = j
 	}
 
 	return bgJobProcessor
 }
 
-func (b *BackgroundJobProcessor) Register(handle JobHandler) HandleFunc {
-	return func(ctx context.Context) error {
-		return handle.Handle(ctx)
+func (b *BackgroundJobProcessor) SetUp() {
+	handlers := []JobHandler{
+		newCleanUpJob(b.conf, b.db),
+		newOrphanedJob(b.conf, b.db),
+		newReindexJobHandler(b.conf, b.db),
+	}
+
+	for _, j := range handlers {
+		b.Register(j)
 	}
 }
 
+func (b *BackgroundJobProcessor) Register(handle JobHandler) {
+	handleFunc := func(ctx context.Context) error {
+		return handle.Handle(ctx)
+	}
+	b.registeredJobs[handle.Name()] = handleFunc
+	b.jobMetas = append(b.jobMetas, handle)
+}
+
 func (b *BackgroundJobProcessor) Start() {
-	go b.dispatcher()
+	go b.cronJobOrchestrator()
 
 	for range 3 {
-		go b.worker()
+		go b.cronJobExecutor()
 	}
 }
 
 func (b *BackgroundJobProcessor) Close() {
 	b.shutdown <- struct{}{}
+	// TODO: Make sure everything gracefully shuts down.
 	close(b.jobsChan)
 }
 
-func (b *BackgroundJobProcessor) dispatcher() {
+func (b *BackgroundJobProcessor) cronJobOrchestrator() {
 	cronJobs := make([]cronJobScheduler, len(b.jobMetas))
 	for i, j := range b.jobMetas {
 		schedule, err := cron.ParseStandard(j.PeriodicSchedule())
@@ -131,7 +136,7 @@ func (b *BackgroundJobProcessor) dispatcher() {
 			}
 		}
 
-		// At some point, another step is needed before running crons.
+		// TODO: At some point, another step is needed before running crons.
 		// Need to ensure a stateful process of storing cron runs, before executing, to ensure they should indeed
 		// be executed. Due to HA environments could have many same crons triggered at same time.
 		for _, readyJob := range cronJobsToConsume {
@@ -140,7 +145,7 @@ func (b *BackgroundJobProcessor) dispatcher() {
 	}
 }
 
-func (b *BackgroundJobProcessor) worker() {
+func (b *BackgroundJobProcessor) cronJobExecutor() {
 	for {
 		select {
 		case <-b.shutdown:

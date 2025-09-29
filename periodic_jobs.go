@@ -14,7 +14,7 @@ var (
 type HandleFunc = func(ctx context.Context) error
 
 type JobRegister interface {
-	Register(handle JobHandler) HandleFunc
+	Register(handle JobHandler)
 }
 
 type JobHandler interface {
@@ -28,7 +28,7 @@ type JobMeta interface {
 }
 
 type baseJobHandler struct {
-	db   outboxdb.OutboxDB
+	db   outboxdb.OutboxMaintenanceDB
 	conf *Config
 }
 
@@ -36,7 +36,7 @@ type cleanUpJobHandler struct {
 	baseJobHandler
 }
 
-func newCleanUpJob(conf *Config, db outboxdb.OutboxDB) *cleanUpJobHandler {
+func newCleanUpJob(conf *Config, db outboxdb.OutboxMaintenanceDB) *cleanUpJobHandler {
 	return &cleanUpJobHandler{
 		baseJobHandler: baseJobHandler{
 			db:   db,
@@ -62,7 +62,7 @@ type orphanedJobHandler struct {
 	baseJobHandler
 }
 
-func newOrphanedJob(conf *Config, db outboxdb.OutboxDB) *orphanedJobHandler {
+func newOrphanedJob(conf *Config, db outboxdb.OutboxMaintenanceDB) *orphanedJobHandler {
 	return &orphanedJobHandler{
 		baseJobHandler: baseJobHandler{
 			db:   db,
@@ -88,7 +88,7 @@ type reindexJobHandler struct {
 	baseJobHandler
 }
 
-func newReindexJobHandler(conf *Config, db outboxdb.OutboxDB) *reindexJobHandler {
+func newReindexJobHandler(conf *Config, db outboxdb.OutboxMaintenanceDB) *reindexJobHandler {
 	return &reindexJobHandler{
 		baseJobHandler: baseJobHandler{
 			db:   db,
