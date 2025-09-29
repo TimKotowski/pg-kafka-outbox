@@ -37,7 +37,7 @@ type cronJobScheduler struct {
 	nextScheduleTime time.Time
 }
 
-func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxMaintenanceDB) JobScheduler {
+func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxDB) JobScheduler {
 	b := baseJobHandler{conf: conf, db: db}
 	handlers := []JobHandler{
 		newCleanUpJob(conf, db),
@@ -131,7 +131,8 @@ func (b *BackgroundJobProcessor) dispatcher() {
 			}
 		}
 
-		// At some point this will need to have one more be replaced with for something more stateful, before executing.
+		// At some point, another step iks needed before running crons.
+		// Need to ensure a stateful process of storing cron runs, before executing.
 		// Due to HA environments could have many same crons triggered at same time.
 		for _, readyJob := range cronJobsToConsume {
 			b.jobsChan <- readyJob.meta.Name()
