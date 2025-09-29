@@ -49,7 +49,7 @@ func (o *Outbox) Init() error {
 		return err
 	}
 
-	processor := newBackgroundJobProcessor(o.conf, o.repository)
+	processor := NewBackgroundJobProcessor(o.conf, o.repository)
 	processor.Start()
 
 	return nil

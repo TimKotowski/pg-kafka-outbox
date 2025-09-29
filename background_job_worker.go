@@ -18,11 +18,11 @@ type JobScheduler interface {
 }
 
 var (
-	_ JobRegister  = &backgroundJobProcessor{}
-	_ JobScheduler = &backgroundJobProcessor{}
+	_ JobRegister  = &BackgroundJobProcessor{}
+	_ JobScheduler = &BackgroundJobProcessor{}
 )
 
-type backgroundJobProcessor struct {
+type BackgroundJobProcessor struct {
 	baseJobHandler
 	registeredJobs map[string]handleFunc
 	jobMetas       []JobMeta
@@ -37,14 +37,14 @@ type cronJobScheduler struct {
 	nextScheduleTime time.Time
 }
 
-func newBackgroundJobProcessor(conf *Config, db outboxdb.OutboxDB) *backgroundJobProcessor {
+func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxMaintenanceDB) JobScheduler {
 	b := baseJobHandler{conf: conf, db: db}
 	handlers := []JobHandler{
 		newCleanUpJob(conf, db),
 		newOrphanedJob(conf, db),
 		newReindexJobHandler(conf, db),
 	}
-	bgJobProcessor := &backgroundJobProcessor{
+	bgJobProcessor := &BackgroundJobProcessor{
 		baseJobHandler: b,
 		registeredJobs: make(map[string]handleFunc),
 		clock:          clockwork.NewRealClock(),
@@ -62,13 +62,13 @@ func newBackgroundJobProcessor(conf *Config, db outboxdb.OutboxDB) *backgroundJo
 	return bgJobProcessor
 }
 
-func (b *backgroundJobProcessor) Register(handle JobHandler) handleFunc {
+func (b *BackgroundJobProcessor) Register(handle JobHandler) handleFunc {
 	return func(ctx context.Context) error {
 		return handle.Handle(ctx)
 	}
 }
 
-func (b *backgroundJobProcessor) Start() {
+func (b *BackgroundJobProcessor) Start() {
 	go b.dispatcher()
 
 	for range 3 {
@@ -76,12 +76,12 @@ func (b *backgroundJobProcessor) Start() {
 	}
 }
 
-func (b *backgroundJobProcessor) Close() {
+func (b *BackgroundJobProcessor) Close() {
 	b.shutdown <- struct{}{}
 	close(b.jobsChan)
 }
 
-func (b *backgroundJobProcessor) dispatcher() {
+func (b *BackgroundJobProcessor) dispatcher() {
 	cronJobs := make([]cronJobScheduler, len(b.jobMetas))
 	for i, j := range b.jobMetas {
 		schedule, err := cron.ParseStandard(j.PeriodicSchedule())
@@ -131,13 +131,15 @@ func (b *backgroundJobProcessor) dispatcher() {
 			}
 		}
 
+		// At some point this will need to have one more be replaced with for something more stateful, before executing.
+		// Due to HA environments could have many same crons triggered at same time.
 		for _, readyJob := range cronJobsToConsume {
 			b.jobsChan <- readyJob.meta.Name()
 		}
 	}
 }
 
-func (b *backgroundJobProcessor) worker() {
+func (b *BackgroundJobProcessor) worker() {
 	for {
 		select {
 		case <-b.shutdown:
