@@ -24,7 +24,7 @@ var (
 
 type BackgroundJobProcessor struct {
 	baseJobHandler
-	registeredJobs map[string]handleFunc
+	registeredJobs map[string]HandleFunc
 	jobMetas       []JobMeta
 	jobsChan       chan string
 	clock          clockwork.Clock
@@ -46,7 +46,7 @@ func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxDB) JobScheduler 
 	}
 	bgJobProcessor := &BackgroundJobProcessor{
 		baseJobHandler: b,
-		registeredJobs: make(map[string]handleFunc),
+		registeredJobs: make(map[string]HandleFunc),
 		clock:          clockwork.NewRealClock(),
 		jobMetas:       make([]JobMeta, len(handlers)),
 		jobsChan:       make(chan string),
@@ -62,7 +62,7 @@ func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxDB) JobScheduler 
 	return bgJobProcessor
 }
 
-func (b *BackgroundJobProcessor) Register(handle JobHandler) handleFunc {
+func (b *BackgroundJobProcessor) Register(handle JobHandler) HandleFunc {
 	return func(ctx context.Context) error {
 		return handle.Handle(ctx)
 	}
@@ -131,9 +131,9 @@ func (b *BackgroundJobProcessor) dispatcher() {
 			}
 		}
 
-		// At some point, another step iks needed before running crons.
-		// Need to ensure a stateful process of storing cron runs, before executing.
-		// Due to HA environments could have many same crons triggered at same time.
+		// At some point, another step is needed before running crons.
+		// Need to ensure a stateful process of storing cron runs, before executing, to ensure they should indeed
+		// be executed. Due to HA environments could have many same crons triggered at same time.
 		for _, readyJob := range cronJobsToConsume {
 			b.jobsChan <- readyJob.meta.Name()
 		}

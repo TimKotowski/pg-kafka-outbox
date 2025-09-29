@@ -11,10 +11,10 @@ var (
 	_ JobHandler = &orphanedJobHandler{}
 )
 
-type handleFunc = func(ctx context.Context) error
+type HandleFunc = func(ctx context.Context) error
 
 type JobRegister interface {
-	Register(handle JobHandler) handleFunc
+	Register(handle JobHandler) HandleFunc
 }
 
 type JobHandler interface {
