@@ -26,7 +26,7 @@ type OutboxDB interface {
 	// Used only if FifoKafkaKeyProcessing is enabled. To ensure FIFO processing of messages per kafka key.
 	//
 	// 1. Only one batch of messages per kafka key can be processed at any given time.
-	// 2. Messages must finish per key, before more are processed. Or when TTL is reached, in which messages will be re-processed.
+	// 2. Messages must be finished (none running) per key, before more are processed. Or when TTL is reached, in which messages will be re-processed.
 	// 3. Messages are processed in the order they were received.
 	ClaimPendingMessagesForProcessingFIFO(ctx context.Context) ([]Message, error)
 
@@ -34,17 +34,10 @@ type OutboxDB interface {
 	// This ensures messages with the same fingerprint cant enter the outbox.
 	ExistsByFingerprint(ctx context.Context, fingerprint []byte) (bool, error)
 
-	// DeleteCompletedMessages deletes messages that are passed TTL time. To clean up space.
-	DeleteCompletedMessages(ctx context.Context, jobIds []string) (int, error)
-
 	// UpdateMessageStatus updates given message with correct status.
 	UpdateMessageStatus(ctx context.Context, jobID string, status Status) error
 
 	UpdateMessagesStatusInTx(ctx context.Context, jobID []string, tx bun.IDB, status Status) ([]Message, error)
-
-	// RequeueOrphanedMessages will update status of message to be able to be reprocessed.
-	// in case of hanging/stalled messages.
-	RequeueOrphanedMessages(ctx context.Context) (int, error)
 }
 
 type outboxDB struct {
@@ -63,7 +56,7 @@ func (r *outboxDB) ClaimPendingMessagesForProcessing(ctx context.Context) ([]Mes
 	var messages []Message
 	sub := r.db.NewSelect().
 		Table("outbox").
-		Column("job_id").
+		Column("id").
 		Where("status IN (?)", bun.In([]string{Pending, PendingRetry})).
 		Order("created_at").
 		Limit(r.limit).
@@ -76,7 +69,7 @@ func (r *outboxDB) ClaimPendingMessagesForProcessing(ctx context.Context) ([]Mes
 		Set("started_at = (?)", time.Now().UTC()).
 		Set("updated_at = (?)", time.Now().UTC()).
 		Set("status = (?)", Running).
-		Where("sub.job_id = o.job_id").
+		Where("sub.id = o.id").
 		Returning("o.*").
 		Scan(ctx, &messages)
 
@@ -186,7 +179,7 @@ func (r *outboxDB) UpdateMessageStatus(ctx context.Context, jobId string, status
 		baseQuery.Set("completed_at = (?)", now)
 	}
 
-	res, err := baseQuery.Where("job_id = (?)", jobId).Exec(ctx)
+	res, err := baseQuery.Where("id = (?)", jobId).Exec(ctx)
 	if err != nil {
 		return err
 	}
@@ -195,7 +188,7 @@ func (r *outboxDB) UpdateMessageStatus(ctx context.Context, jobId string, status
 		return err
 	}
 	if rows == NoRowsAffected {
-		return errors.New(fmt.Sprintf("updating message failed for job_id %s status %s", jobId, status))
+		return errors.New(fmt.Sprintf("updating message failed for id %s status %s", jobId, status))
 	}
 
 	return nil
@@ -226,7 +219,7 @@ func (r *outboxDB) UpdateMessagesStatusInTx(ctx context.Context, jobIds []string
 	}
 
 	err := baseQuery.
-		Where("job_id IN (?)", bun.In(jobIds)).
+		Where("id IN (?)", bun.In(jobIds)).
 		Returning("*").
 		Scan(ctx, &messages)
 
@@ -247,7 +240,7 @@ func (r *outboxDB) getPendingMessagesFIFOTx(ctx context.Context, acquiredGroupID
 		Where("o.status IN (?)", bun.In([]string{Pending, PendingRetry}))
 
 	err := tx.NewSelect().
-		Column("sub.job_id").
+		Column("sub.id").
 		TableExpr("(?) as sub", subQuery).
 		Where("sub.rn <= (?)", FifoLimit).
 		Scan(ctx, &jobIds)
@@ -348,10 +341,8 @@ func (r *outboxDB) withDistributedLocksTx(ctx context.Context, keys []int64, tx 
 	return acquiredGroupIDLocks, nil
 }
 
-// getAdvisoryLockIdentifier returns a mask of first 8 bytes as int64 from the groupId hash from the key.
-// Although possible to have a collison, very unlikely but possible.
-// The impact wouldn't get big, since it would just not process these messages for the key.
-// Worst case, messages for group id derived from the key will wait to be processed eventually.
+// getAdvisoryLockIdentifier ensures that the resulting hash fits within the positive range of an int64 (0 to 2^63 - 1).
+// Want to avoid out-of-range conversions.
 func (r *outboxDB) getAdvisoryLockIdentifier(key string) (int64, error) {
 	decodedHash, err := hex.DecodeString(key)
 	if err != nil {

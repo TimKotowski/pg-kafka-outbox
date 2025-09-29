@@ -49,7 +49,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Correct precessing ordering. Should be monotonically increasing order by created based on status
-		sortMessagesByStatusAndCreatedAt(updatedMessages)
+		sortMessagesByStatusAndCreatedAt(t, updatedMessages)
 		runningMessages := updatedMessages[:10]
 		pendingMessages := updatedMessages[10:]
 		assert.Len(t, runningMessages, 10)
@@ -77,7 +77,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		jobIds := testHelper.Map(messagesRunning, func(m outboxdb.Message) string {
-			return m.JobId
+			return m.Id
 		})
 		updateMessages(t, jobIds, resource.DB, outboxdb.Running, r)
 
@@ -91,7 +91,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		var updatedMessages []outboxdb.Message
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(t.Context())
 		assert.NoError(t, err)
-		sortMessagesByStatusAndCreatedAt(updatedMessages)
+		sortMessagesByStatusAndCreatedAt(t, updatedMessages)
 
 		runningMessages := updatedMessages[:10]
 		pendingMessages := updatedMessages[10:]
@@ -174,7 +174,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.True(t, group1Found)
 		assert.Len(t, userGroup1, 20)
 
-		sortMessagesByStatusAndCreatedAt(userGroup1)
+		sortMessagesByStatusAndCreatedAt(t, userGroup1)
 		runningGroup1Messages := userGroup1[:10]
 		pendingGroup1Messages := userGroup1[10:]
 		// Ensure messages with the same timestamp maintain correct order.
@@ -188,7 +188,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		group2Hash.Write([]byte(userTopic), userKafkaKey2)
 		userGroup2, group2Found := userKeyMap[group2Hash.Key()]
 		assert.True(t, group2Found)
-		sortMessagesByStatusAndCreatedAt(userGroup2)
+		sortMessagesByStatusAndCreatedAt(t, userGroup2)
 
 		runningGroup2Messages := userGroup2[:10]
 		pendingGroup2Messages := userGroup2[10:]
@@ -198,7 +198,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assertRunningInRepository(t, userGroup2[:10])
 		assertPendingInRepository(t, userGroup2[10:])
 
-		sortMessagesByStatusAndCreatedAt(orderMessages)
+		sortMessagesByStatusAndCreatedAt(t, orderMessages)
 		runningGroup3Messages := orderMessages[:10]
 		pendingGroup3Messages := orderMessages[10:]
 		// Ensure messages with the same timestamp maintain correct order.
@@ -230,7 +230,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		messageIds := testHelper.Map(group3Running, func(m outboxdb.Message) string {
-			return m.JobId
+			return m.Id
 		})
 		updateMessages(t, messageIds, resource.DB, outboxdb.Running, r)
 
@@ -253,14 +253,14 @@ func TestFifoMessageProcessing(t *testing.T) {
 		group1, group1Found := groupMap[group1Hash]
 		assert.True(t, group1Found)
 		assert.Len(t, group1, 5)
-		sortMessagesByStatusAndCreatedAt(group1)
+		sortMessagesByStatusAndCreatedAt(t, group1)
 		assertRunningInRepository(t, group1)
 
 		group2Hash := generateGroupId([]byte(userTopic), userKafkaKey2)
 		group2, group2Found := groupMap[group2Hash]
 		assert.True(t, group2Found)
 		assert.Len(t, group2, 5)
-		sortMessagesByStatusAndCreatedAt(group2)
+		sortMessagesByStatusAndCreatedAt(t, group2)
 		assertRunningInRepository(t, group2)
 
 		group3Hash := generateGroupId([]byte(userTopic), userKafkaKey3)
@@ -268,7 +268,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.True(t, group3Found)
 		assert.Len(t, group3, 6)
 
-		sortMessagesByStatusAndCreatedAt(group3)
+		sortMessagesByStatusAndCreatedAt(t, group3)
 		runningMessage := group3[0]
 		pendingMessages := group3[1:]
 		assert.NotNil(t, runningMessage.StartedAt)
@@ -288,7 +288,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		messages := generateOutBoxMessages(key, nil, topic, 5, outboxdb.Pending)
 
 		jobIds := testHelper.Map(messages, func(m outboxdb.Message) string {
-			return m.JobId
+			return m.Id
 		})
 		updateMessages(t, jobIds, resource.DB, outboxdb.PendingRetry, r)
 
@@ -303,7 +303,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		err = resource.DB.NewSelect().Model(&updatedMessages).Scan(ctx)
 		assert.NoError(t, err)
 
-		sortMessagesByStatusAndCreatedAt(updatedMessages)
+		sortMessagesByStatusAndCreatedAt(t, updatedMessages)
 		assertRunningInRepository(t, updatedMessages)
 	})
 
@@ -318,7 +318,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		messageIds := testHelper.Map(completed, func(m outboxdb.Message) string {
-			return m.JobId
+			return m.Id
 		})
 		updateMessages(t, messageIds, resource.DB, outboxdb.Running, r)
 		updateMessages(t, messageIds, resource.DB, outboxdb.Completed, r)
@@ -328,7 +328,7 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		failedJobIds := testHelper.Map(failed, func(m outboxdb.Message) string {
-			return m.JobId
+			return m.Id
 		})
 		updateMessages(t, failedJobIds, resource.DB, outboxdb.Running, r)
 		updateMessages(t, failedJobIds, resource.DB, outboxdb.Failed, r)
@@ -345,13 +345,13 @@ func TestFifoMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		runningJobsIds := testHelper.Map(pending, func(m outboxdb.Message) string {
-			return m.JobId
+			return m.Id
 		})
 
 		var expectedRunnnMessages []outboxdb.Message
 		err = resource.DB.NewSelect().
 			Model(&expectedRunnnMessages).
-			Where("job_id IN (?)", bun.In(runningJobsIds)).
+			Where("id IN (?)", bun.In(runningJobsIds)).
 			Scan(t.Context())
 		assert.NoError(t, err)
 
@@ -426,7 +426,7 @@ func TestStandardMessageProcessing(t *testing.T) {
 		assert.NoError(t, err)
 
 		messageIds := testHelper.Map(messages, func(m outboxdb.Message) string {
-			return m.JobId
+			return m.Id
 		})
 		updateMessages(t, messageIds, resource.DB, outboxdb.Running, r)
 
@@ -446,7 +446,7 @@ func generateOutBoxMessages(key, payload []byte, topic string, amount int, statu
 		fingerPrintHash.Write([]byte(topic), key, payload)
 
 		message := outboxdb.Message{
-			JobId:       ulid.Make().String(),
+			Id:          ulid.Make().String(),
 			Topic:       topic,
 			Key:         key,
 			Payload:     payload,
@@ -464,6 +464,8 @@ func generateOutBoxMessages(key, payload []byte, topic string, amount int, statu
 }
 
 func assertRunningInRepository(t *testing.T, messages []outboxdb.Message) {
+	t.Helper()
+
 	for i := 0; i < len(messages)-1; i++ {
 		currentMessage := messages[i]
 		nextMessage := messages[i+1]
@@ -478,13 +480,17 @@ func assertRunningInRepository(t *testing.T, messages []outboxdb.Message) {
 }
 
 func assertPendingInRepository(t *testing.T, messages []outboxdb.Message) {
+	t.Helper()
+
 	for _, pendingMessage := range messages {
 		assert.Equal(t, outboxdb.Pending, pendingMessage.Status)
 		assert.Nil(t, pendingMessage.StartedAt)
 	}
 }
 
-func sortMessagesByStatusAndCreatedAt(messages []outboxdb.Message) {
+func sortMessagesByStatusAndCreatedAt(t *testing.T, messages []outboxdb.Message) {
+	t.Helper()
+
 	slices.SortFunc(messages, func(a, b outboxdb.Message) int {
 		if a.Status == outboxdb.Running && b.Status == outboxdb.Pending {
 			return -1
@@ -512,6 +518,8 @@ func generateGroupId(topic, key []byte) string {
 }
 
 func updateMessages(t *testing.T, jobIds []string, db *bun.DB, status outboxdb.Status, r outboxdb.OutboxDB) {
+	t.Helper()
+
 	_, err := outboxdb.RunInTxWithReturnType(t.Context(), db, func(tx bun.Tx) ([]outboxdb.Message, error) {
 		m, err := r.UpdateMessagesStatusInTx(t.Context(), jobIds, tx, status)
 		if err != nil {

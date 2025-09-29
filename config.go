@@ -13,7 +13,7 @@ type Config struct {
 	// Interval rate for polling outbox messages.
 	QueueDelay time.Duration
 
-	// Interval period for requeueing hanging/stalled outbox messages.
+	// Interval period for requesting hanging/stalled outbox messages.
 	RequeueDelay time.Duration
 
 	// Interval period for removing completed outbox messages.
@@ -40,8 +40,8 @@ type Config struct {
 	FifoKafkaKeyProcessing bool
 
 	// Enables deduplication of Kafka records based on (key, payload, and topic) using SHA-256 hashing.
-	// When enabled, this setting ensures exactly once processing of messages where prcoessing duplicates
-	// isnt accepatble.
+	// When enabled, this setting ensures exactly once processing of messages where processing duplicates
+	// isn't acceptable.
 	//
 	// Enable this option if deduplication of Kafka records is important for processing logic.
 	//

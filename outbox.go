@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
@@ -10,12 +11,17 @@ import (
 	"github.com/uptrace/bun"
 )
 
+const (
+	uninitialized = iota
+	running
+)
+
 type Outbox struct {
 	ctx        context.Context
 	conf       *Config
 	repository outboxdb.OutboxDB
 	db         *bun.DB
-	worker     *worker
+	state      atomic.Uint32
 }
 
 func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
@@ -23,21 +29,19 @@ func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	repository := outboxdb.NewOutboxDB(db, conf.FetchLimit)
-	worker := newWorker(ctx, conf, repository)
 
 	return &Outbox{
 		ctx:        ctx,
 		conf:       conf,
 		repository: repository,
 		db:         db,
-		worker:     worker,
+		state:      atomic.Uint32{},
 	}, nil
 }
 
 func (o *Outbox) Init() error {
-	if !o.worker.state.CompareAndSwap(uninitialized, running) {
+	if !o.state.CompareAndSwap(uninitialized, running) {
 		return errors.New("initializing outbox already occurred, and outbox is actively running")
 	}
 
@@ -45,9 +49,8 @@ func (o *Outbox) Init() error {
 		return err
 	}
 
-	for range o.worker.availableWorkers {
-		go o.worker.start()
-	}
+	processor := newBackgroundJobProcessor(o.conf, o.repository)
+	processor.Start()
 
 	return nil
 }
