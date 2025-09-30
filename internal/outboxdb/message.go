@@ -20,7 +20,7 @@ const (
 type Message struct {
 	bun.BaseModel `bun:"table:outbox"`
 
-	JobId       string     `bun:"job_id,pk"`
+	Id          string     `bun:"id,pk"`
 	Topic       string     `bun:"topic,notnull"`
 	Key         []byte     `bun:"key"`
 	Payload     []byte     `bun:"payload"`

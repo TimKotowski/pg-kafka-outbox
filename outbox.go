@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
@@ -10,12 +11,19 @@ import (
 	"github.com/uptrace/bun"
 )
 
+const (
+	uninitialized = iota
+	running
+)
+
 type Outbox struct {
-	ctx        context.Context
-	conf       *Config
-	repository outboxdb.OutboxDB
-	db         *bun.DB
-	worker     *worker
+	ctx           context.Context
+	conf          *Config
+	outboxDB      outboxdb.OutboxDB
+	maintenanceDB outboxdb.OutboxMaintenanceDB
+	jobScheduler  JobScheduler
+	db            *bun.DB
+	state         atomic.Uint32
 }
 
 func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
@@ -23,33 +31,37 @@ func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	repository := outboxdb.NewOutboxDB(db, conf.FetchLimit)
-	worker := newWorker(ctx, conf, repository)
+	outboxDB := outboxdb.NewOutboxDB(db, conf.FetchLimit)
+	maintenanceDB := outboxdb.NewOutboxMaintaner(db, conf.FetchLimit)
+	jobScheduler := NewBackgroundJobProcessor(conf, nil, NewClock())
 
 	return &Outbox{
-		ctx:        ctx,
-		conf:       conf,
-		repository: repository,
-		db:         db,
-		worker:     worker,
+		ctx:           ctx,
+		conf:          conf,
+		outboxDB:      outboxDB,
+		maintenanceDB: maintenanceDB,
+		jobScheduler:  jobScheduler,
+		db:            db,
+		state:         atomic.Uint32{},
 	}, nil
 }
 
 func (o *Outbox) Init() error {
-	if !o.worker.state.CompareAndSwap(uninitialized, running) {
+	if !o.state.CompareAndSwap(uninitialized, running) {
 		return errors.New("initializing outbox already occurred, and outbox is actively running")
 	}
-
 	if err := migrations.Migrate(o.ctx, o.db); err != nil {
 		return err
 	}
-
-	for range o.worker.availableWorkers {
-		go o.worker.start()
-	}
+	o.jobScheduler.SetUp()
+	o.jobScheduler.Start()
 
 	return nil
+}
+
+// TODO: add shutdown chan for consumers.
+func (o *Outbox) Shutdown() {
+	o.jobScheduler.Close()
 }
 
 func (o *Outbox) EnqueueBatchMessages(messages []Message) error {

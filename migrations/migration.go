@@ -22,7 +22,12 @@ func init() {
 }
 
 func Migrate(ctx context.Context, db *bun.DB) error {
-	m := migrate.NewMigrator(db, Migrations)
+	m := migrate.NewMigrator(
+		db,
+		Migrations,
+		migrate.WithTableName("outbox_migrations"),
+		migrate.WithLocksTableName("outbox_migration_locks"),
+	)
 	if err := m.Init(ctx); err != nil {
 		return err
 	}
