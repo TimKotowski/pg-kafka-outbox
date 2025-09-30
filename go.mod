@@ -4,7 +4,6 @@ go 1.24
 
 require (
 	github.com/jackc/pgx/v5 v5.7.5
-	github.com/jonboulle/clockwork v0.5.0
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/ory/dockertest v3.3.5+incompatible
 	github.com/robfig/cron/v3 v3.0.0

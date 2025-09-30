@@ -5,8 +5,6 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"github.com/jonboulle/clockwork"
-
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
 
@@ -19,11 +17,13 @@ const (
 )
 
 type Outbox struct {
-	ctx        context.Context
-	conf       *Config
-	repository outboxdb.OutboxDB
-	db         *bun.DB
-	state      atomic.Uint32
+	ctx           context.Context
+	conf          *Config
+	outboxDB      outboxdb.OutboxDB
+	maintenanceDB outboxdb.OutboxMaintenanceDB
+	jobScheduler  JobScheduler
+	db            *bun.DB
+	state         atomic.Uint32
 }
 
 func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
@@ -31,14 +31,18 @@ func NewFromConfig(ctx context.Context, conf *Config) (*Outbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	repository := outboxdb.NewOutboxDB(db, conf.FetchLimit)
+	outboxDB := outboxdb.NewOutboxDB(db, conf.FetchLimit)
+	maintenanceDB := outboxdb.NewOutboxMaintaner(db, conf.FetchLimit)
+	jobScheduler := NewBackgroundJobProcessor(conf, nil, NewClock())
 
 	return &Outbox{
-		ctx:        ctx,
-		conf:       conf,
-		repository: repository,
-		db:         db,
-		state:      atomic.Uint32{},
+		ctx:           ctx,
+		conf:          conf,
+		outboxDB:      outboxDB,
+		maintenanceDB: maintenanceDB,
+		jobScheduler:  jobScheduler,
+		db:            db,
+		state:         atomic.Uint32{},
 	}, nil
 }
 
@@ -46,15 +50,18 @@ func (o *Outbox) Init() error {
 	if !o.state.CompareAndSwap(uninitialized, running) {
 		return errors.New("initializing outbox already occurred, and outbox is actively running")
 	}
-
 	if err := migrations.Migrate(o.ctx, o.db); err != nil {
 		return err
 	}
-
-	processor := NewBackgroundJobProcessor(o.conf, nil, clockwork.NewRealClock())
-	processor.Start()
+	o.jobScheduler.SetUp()
+	o.jobScheduler.Start()
 
 	return nil
+}
+
+// TODO: add shutdown chan for consumers.
+func (o *Outbox) Shutdown() {
+	o.jobScheduler.Close()
 }
 
 func (o *Outbox) EnqueueBatchMessages(messages []Message) error {
