@@ -2,6 +2,12 @@ package outboxdb
 
 import (
 	"context"
+
+	"github.com/uptrace/bun"
+)
+
+var (
+	_ OutboxMaintenanceDB = &o{}
 )
 
 type OutboxMaintenanceDB interface {
@@ -17,4 +23,31 @@ type OutboxMaintenanceDB interface {
 
 	// DeleteCompletedMessages deletes messages that are passed TTL time. To clean up space.
 	DeleteCompletedMessages(ctx context.Context, jobIds []string) (int, error)
+}
+
+type o struct {
+	db    *bun.DB
+	limit int
+}
+
+func (o o) ReIndex() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o o) RequeueOrphanedMessages(ctx context.Context) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o o) DeleteCompletedMessages(ctx context.Context, jobIds []string) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func NewOutboxMaintaner(db *bun.DB, limit int) OutboxMaintenanceDB {
+	return &o{
+		db:    db,
+		limit: limit,
+	}
 }

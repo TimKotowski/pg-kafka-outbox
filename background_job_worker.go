@@ -6,7 +6,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/jonboulle/clockwork"
 	"github.com/robfig/cron/v3"
 
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
@@ -22,13 +21,16 @@ var (
 	_ JobRegister  = &BackgroundJobProcessor{}
 	_ JobScheduler = &BackgroundJobProcessor{}
 )
+var (
+	cronParser = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+)
 
 type BackgroundJobProcessor struct {
 	baseJobHandler
 	registeredJobs map[string]HandleFunc
 	jobMetas       []JobMeta
 	jobsChan       chan string
-	clock          clockwork.Clock
+	clock          Clock
 	shutdown       chan struct{}
 }
 
@@ -38,7 +40,7 @@ type cronJobScheduler struct {
 	nextScheduleTime time.Time
 }
 
-func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxMaintenanceDB, clock clockwork.Clock) *BackgroundJobProcessor {
+func NewBackgroundJobProcessor(conf *Config, db outboxdb.OutboxMaintenanceDB, clock Clock) *BackgroundJobProcessor {
 	b := baseJobHandler{conf: conf, db: db}
 	bgJobProcessor := &BackgroundJobProcessor{
 		baseJobHandler: b,
@@ -89,13 +91,14 @@ func (b *BackgroundJobProcessor) Close() {
 func (b *BackgroundJobProcessor) cronJobOrchestrator() {
 	cronJobs := make([]cronJobScheduler, len(b.jobMetas))
 	for i, j := range b.jobMetas {
-		schedule, err := cron.ParseStandard(j.PeriodicSchedule())
+		schedule, err := cronParser.Parse(j.PeriodicSchedule())
 		if err != nil {
 			log.Println("unable to parse crontab schedule", j.Name(), j.PeriodicSchedule())
 			continue
 		}
 		cronJobs[i] = cronJobScheduler{
 			meta:             j,
+			schedule:         schedule,
 			nextScheduleTime: schedule.Next(b.clock.Now()),
 		}
 	}
@@ -113,9 +116,11 @@ func (b *BackgroundJobProcessor) cronJobOrchestrator() {
 
 		cronJob := cronJobs[0]
 		dur := cronJob.nextScheduleTime.Sub(b.clock.Now())
-		// in case of negative make sure ticker just fires right away, the cron is already ready for a next run.
+		// In case of negative make sure ticker to just set ticker to really low, so it can fire right away.
+		// I don't know how practical this edge case could be, but seems fine to at least have this safeguard,
+		// so NewTicker won't cause a potential panic, due to weird timing of negative.
 		if dur < 0 {
-			dur = time.Millisecond * 100
+			dur = time.Millisecond * 50
 		}
 		wait := time.NewTicker(dur)
 		select {
@@ -124,11 +129,12 @@ func (b *BackgroundJobProcessor) cronJobOrchestrator() {
 		case <-wait.C:
 		}
 
+		// Clock work is not actualy
+		now := b.clock.Now()
+		cronJob.nextScheduleTime = cronJob.schedule.Next(now)
 		// in case more than one cron is overdue/ready. This can happen due to more frequent running jobs that
 		// eventually overlap with other longer waiting jobs that are ready.
 		cronJobsToConsume := []cronJobScheduler{cronJob}
-		now := b.clock.Now()
-		cronJob.nextScheduleTime = cronJob.schedule.Next(now)
 		for i := 1; i < len(cronJobs); i++ {
 			if cronJobs[i].nextScheduleTime.Before(now) || cronJobs[i].nextScheduleTime.Equal(now) {
 				cronJobs[i].nextScheduleTime = cronJobs[i].schedule.Next(now)
@@ -138,7 +144,7 @@ func (b *BackgroundJobProcessor) cronJobOrchestrator() {
 
 		// TODO: At some point, another step is needed before running crons.
 		// Need to ensure a stateful process of storing cron runs, before executing, to ensure they should indeed
-		// be executed. Due to HA environments could have many same crons triggered at same time.
+		// be idempotent. Due to HA environments could have many of the same cron triggered at same time.
 		for _, readyJob := range cronJobsToConsume {
 			b.jobsChan <- readyJob.meta.Name()
 		}

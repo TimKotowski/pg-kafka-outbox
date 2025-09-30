@@ -51,7 +51,7 @@ func (c *cleanUpJobHandler) Handle(ctx context.Context) error {
 
 // PeriodicSchedule Start little past beginning 7 hour mark to prevent scheduling oddities.
 func (c *cleanUpJobHandler) PeriodicSchedule() string {
-	return "5 */7 * * *"
+	return "0 5 7 * * *"
 }
 
 func (c *cleanUpJobHandler) Name() string {
@@ -77,7 +77,7 @@ func (o *orphanedJobHandler) Handle(ctx context.Context) error {
 
 // PeriodicSchedule Start little past beginning of every hour to prevent scheduling oddities.
 func (o *orphanedJobHandler) PeriodicSchedule() string {
-	return "5 * * * *"
+	return "0 */5 * * * *"
 }
 
 func (o *orphanedJobHandler) Name() string {
@@ -103,7 +103,7 @@ func (r *reindexJobHandler) Handle(ctx context.Context) error {
 
 // PeriodicSchedule Start little past beginning of 12am to prevent scheduling oddities.
 func (r *reindexJobHandler) PeriodicSchedule() string {
-	return "5 0 * * *"
+	return "0 5 0 * * *"
 }
 
 func (r *reindexJobHandler) Name() string {

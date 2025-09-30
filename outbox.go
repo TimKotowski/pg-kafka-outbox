@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"github.com/jonboulle/clockwork"
+
 	"github.com/TimKotowski/pg-kafka-outbox/internal/outboxdb"
 	"github.com/TimKotowski/pg-kafka-outbox/migrations"
 
@@ -49,7 +51,7 @@ func (o *Outbox) Init() error {
 		return err
 	}
 
-	processor := NewBackgroundJobProcessor(o.conf, o.repository)
+	processor := NewBackgroundJobProcessor(o.conf, nil, clockwork.NewRealClock())
 	processor.Start()
 
 	return nil
