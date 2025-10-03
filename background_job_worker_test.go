@@ -139,7 +139,7 @@ func TestSimpleCronJobRun(t *testing.T) {
 
 		assert.Eventually(t, func() bool {
 			return assert.Greater(t, testHandlerOne.atomic.Load(), int64(0))
-		}, time.Minute*60, time.Second*1)
+		}, time.Second*2, time.Second*1)
 	})
 
 	t.Run("idempotence", func(t *testing.T) {
